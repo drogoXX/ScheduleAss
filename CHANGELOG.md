@@ -1,5 +1,127 @@
 # Changelog
 
+## [1.0.7] - 2025-11-02
+
+### Fixed - Duration Analysis Now Excludes Milestones and Uses Only P6 Durations
+
+**Issue Reported:**
+User received message: "235 activities have negative durations (Finish before Start)" and requested:
+1. Use "At Completion Duration(d)" column exclusively for duration analysis
+2. Exclude milestones from duration analysis (they have duration = 0 by nature)
+
+**Root Cause:**
+The analyzer was checking for negative durations even when using "At Completion Duration" from P6:
+- Negative duration check was designed for calculated_duration (Finish - Start)
+- But was being applied to P6 "At Completion Duration" column (which is always positive)
+- This caused incorrect "negative duration" warnings
+- Milestones (duration = 0) were being included in duration statistics, skewing averages
+
+**Solution:**
+
+**1. Removed Calculated Duration Fallback** (`src/analysis/dcma_analyzer.py`)
+
+BEFORE:
+```python
+duration_col = 'At Completion Duration' if 'At Completion Duration' in self.df.columns else 'calculated_duration'
+```
+
+AFTER:
+```python
+duration_col = 'At Completion Duration'  # REQUIRED - use P6 work days only
+```
+
+**2. Excluded Milestones from Analysis**
+
+Added milestone filtering in both `_analyze_average_duration()` and `_analyze_long_durations()`:
+
+```python
+if 'Activity Type' in self.df.columns:
+    # Exclude activities where Activity Type contains "Milestone"
+    is_milestone = self.df['Activity Type'].str.contains('Milestone', case=False, na=False)
+    milestone_count = is_milestone.sum()
+    non_milestone_df = self.df[~is_milestone]
+```
+
+Milestones identified by Activity Type containing:
+- "Start Milestone"
+- "Finish Milestone"
+- "Level of Effort Milestone"
+- Any other type containing "Milestone"
+
+**3. Removed Negative Duration Check for P6 Data**
+
+BEFORE:
+- Checked "At Completion Duration" for negative values
+- Created issues for "negative durations"
+- Used absolute values in calculations
+
+AFTER:
+- No negative duration check (P6 durations are always positive work days)
+- Uses actual P6 values directly
+- Shows error if "At Completion Duration" column missing
+
+**4. Enhanced Metrics**
+
+New fields in `average_duration` metrics:
+```python
+{
+    'mean': X,
+    'median': X,
+    'min': X,
+    'max': X,
+    'total_activities_analyzed': X,  # NEW - count excluding milestones
+    'milestones_excluded': X,        # NEW - count of milestones
+    'source_column': 'At Completion Duration'  # NEW - shows data source
+}
+```
+
+**5. Updated Dashboard Display** (`pages/2_Analysis_Dashboard.py`)
+
+- Removed negative duration warning display
+- Added info message: "Analyzed X activities (excluded Y milestones)"
+- Added help text: "Based on 'At Completion Duration' from P6"
+- Updated tooltips: "Excluding milestones"
+
+**Testing:**
+
+Test with 8 activities (4 tasks + 4 milestones):
+- Tasks: 15, 30, 45, 60 days
+- Milestones: 0, 0, 0, 0 days
+
+Results:
+- ✅ Mean: 37.5 days (correct - only tasks)
+- ✅ Median: 37.5 days (correct - only tasks)
+- ✅ Min: 15 days, Max: 60 days
+- ✅ Activities analyzed: 4 (tasks only)
+- ✅ Milestones excluded: 4
+- ✅ No negative duration issues
+- ✅ Source column: 'At Completion Duration'
+
+**Impact:**
+
+BEFORE:
+- Used calculated_duration if "At Completion Duration" not found
+- Included milestones (duration = 0) in average calculations
+- Showed false "negative duration" warnings
+- Average skewed by zero-duration milestones
+
+AFTER:
+- Uses ONLY "At Completion Duration" from P6
+- Excludes milestones from all duration calculations
+- No false negative duration warnings
+- Accurate duration metrics for tasks only
+- Clear indication of how many milestones were excluded
+
+**Files Modified:**
+- `src/analysis/dcma_analyzer.py` - Milestone exclusion and P6-only duration
+- `pages/2_Analysis_Dashboard.py` - Updated display with milestone info
+- `CHANGELOG.md` - Version 1.0.7 entry
+
+**Files Added:**
+- `test_duration_with_milestones.py` - Comprehensive test for milestone exclusion
+
+---
+
 ## [1.0.6] - 2025-11-02
 
 ### Fixed - Duration Analysis Not Using "At Completion Duration(d)" Column
