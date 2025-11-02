@@ -310,6 +310,10 @@ class DCMAAnalyzer:
 
             # Add warning if negative durations found
             if negative_count > 0:
+                # Get the indices of activities with negative durations
+                negative_indices = durations[durations < 0].index
+                affected_activity_ids = list(self.df.loc[negative_indices, 'Activity ID'].values)
+
                 self.issues.append({
                     'category': 'Data Quality',
                     'severity': 'high',
@@ -317,7 +321,7 @@ class DCMAAnalyzer:
                     'description': f'Found {negative_count} activities with negative durations. This usually indicates Finish dates are before Start dates, which is a data quality issue.',
                     'count': int(negative_count),
                     'recommendation': 'Review activities with negative durations and correct the Start/Finish dates in P6.',
-                    'affected_activities': list(self.df[durations < 0]['Activity ID'].values) if negative_count > 0 else []
+                    'affected_activities': affected_activity_ids
                 })
         else:
             self.metrics['average_duration'] = {
