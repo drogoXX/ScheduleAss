@@ -1,5 +1,235 @@
 # Changelog
 
+## [1.0.8] - 2025-11-02
+
+### Added - Comprehensive Total Float Analysis
+
+**Feature Request:** Implement comprehensive Total Float analysis with 7 KPIs and 5 interactive charts
+
+**Implementation:**
+
+#### Analyzer Enhancement (`src/analysis/dcma_analyzer.py`)
+
+Added new method `_analyze_comprehensive_float()` implementing ALL 7 required KPIs:
+
+**KPI 1: Critical Path (Float = 0)**
+- Count and percentage of critical activities
+- Status indicator: Good (<5% or 5-15%), Warning (15-20%), Fail (>20%)
+- DCMA guideline: 5-15% is normal, <5% may indicate missing logic, >15% is concerning
+
+**KPI 2: Near-Critical Activities (Float 1-10 days)**
+- Count and percentage of near-critical activities
+- These activities can easily become critical and require close monitoring
+
+**KPI 3: Negative Float (Behind Schedule)**
+- Count, percentage, and list of activities with negative float
+- Status indicator: Good (0 activities), Fail (>0 activities)
+- Activities sorted by most negative float first (worst delays)
+- Creates HIGH severity issue when detected
+
+**KPI 4: Float Ratio**
+- Ratio = Average Total Float / Average Remaining Duration
+- Target range: 0.5 - 1.5 (DCMA best practice)
+- Status: Good (0.5-1.5), Warning (<0.5 or >1.5), Fail (extreme values)
+- Uses remaining duration for incomplete activities only
+
+**KPI 5: Statistical Measures**
+- Mean total float
+- Median total float
+- Standard deviation of total float
+
+**KPI 6: Excessive Float**
+- Activities with float >50% of project duration
+- Count and percentage
+- May indicate missing logic or unrealistic durations
+
+**KPI 7: Most Negative Float**
+- Identifies the worst delay in the schedule
+- Helps prioritize recovery efforts
+
+**Data Structures for Charts:**
+
+```python
+# Float Distribution (for histogram and donut chart)
+'distribution': {
+    'negative': count,      # <0 (Behind schedule)
+    'critical': count,      # =0 (Critical path)
+    'near_critical': count, # 1-10 (Near-critical)
+    'low_risk': count,      # 11-30 (Low risk)
+    'comfortable': count    # >30 (Comfortable)
+}
+
+# Float by WBS Code (for box plot)
+'float_by_wbs': {
+    'WBS 1.0': [float values...],
+    'WBS 2.0': [float values...],
+    ...
+}
+```
+
+**Issue Detection:**
+- Negative float: HIGH severity - "X activities behind schedule"
+- Excessive critical path (>15%): MEDIUM severity - "X% of activities are critical"
+- Poor float ratio (<0.5 or >1.5): MEDIUM/HIGH severity - "Schedule may be too tight/loose"
+- Excessive float (many activities >50% project): LOW severity - "May indicate missing logic"
+
+#### Dashboard Enhancement (`pages/2_Analysis_Dashboard.py`)
+
+Added new "Float Analysis" tab (3rd tab) with comprehensive visualizations:
+
+**Row 1: Summary KPI Cards (4 color-coded cards)**
+- Critical Path (count, %, status with ✓/⚠/✗ indicator)
+- Near-Critical (count, %)
+- Behind Schedule / Negative Float (count, %, status)
+- Float Ratio (value, status)
+
+Colors: Green (good), Orange (warning), Red (fail)
+
+**Row 2: Primary Charts (2 columns)**
+
+1. **Float Distribution Histogram** (color-coded bars)
+   - Negative (<0): Red
+   - Critical (0): Orange/Red
+   - Near-Critical (1-10): Yellow
+   - Low Risk (11-30): Light Green
+   - Comfortable (>30): Dark Green
+   - Shows count labels on bars
+
+2. **Critical Path Analysis Donut Chart** (4 segments)
+   - Critical (0 days)
+   - Near-Critical (1-10 days)
+   - Low Risk (11-30 days)
+   - Comfortable (>30 days)
+   - Shows percentage distribution with legend
+
+**Row 3: Additional Metrics & Box Plot (2 columns)**
+
+1. **Statistical Summary** (left column)
+   - Mean Float
+   - Median Float
+   - Standard Deviation
+   - Worst Delay (most negative float)
+   - Excessive Float count (if any)
+
+2. **Float Box Plot by WBS Code** (right column)
+   - Shows float distribution across top 10 WBS codes
+   - Box plot displays quartiles, mean, and outliers
+   - Horizontal threshold lines at 0 (Critical) and 10 (Near-Critical)
+   - Helps identify problematic project areas
+
+**Row 4: Negative Float Activities Table**
+- Sortable table showing top 20 activities with negative float
+- Columns: Activity ID, Activity Name, Total Float, Status
+- Download button for full CSV export
+- Shows count if more than 20 activities
+
+**Row 5: Interpretation Guidance** (2 columns)
+- DCMA best practices for float thresholds
+- Float ratio interpretation
+- Excessive float causes and remedies
+- Critical path percentage guidelines
+
+#### Parser Fix (`src/parsers/schedule_parser.py`)
+
+Enhanced `_validate_columns()` to handle P6 column suffixes during validation:
+
+BEFORE:
+- Validation failed for "Total Float(d)" because looking for exact match "Total Float"
+- Column normalization happened AFTER validation
+- Test failed with: "Missing required columns: Total Float"
+
+AFTER:
+- Validation now normalizes column names before checking
+- Accepts "Total Float(d)", "Total Float (d)", "Total Float(days)" etc.
+- Column normalization happens in both validation AND cleaning
+- Test passes: "Total Float(d)" → recognized and normalized
+
+**Normalization Logic:**
+```python
+def normalize_for_matching(col_name):
+    # Removes: (d), (h), (%), (wk), (mo), (yr), (days), (hours), etc.
+    normalized = re.sub(r'\s*\([dhwmy%]+\)\s*$', '', col_name, flags=re.IGNORECASE)
+    return normalized.strip()
+```
+
+#### Testing
+
+**Test Script: `test_float_analysis.py`**
+
+Test data (12 activities):
+- 3 Critical tasks (Float = 0)
+- 2 Near-critical tasks (Float = 5, 8)
+- 1 Low Risk task (Float = 15)
+- 2 Comfortable tasks (Float = 35, 60)
+- 2 Behind schedule tasks (Float = -5, -10)
+- 2 Parallel tasks (Float = 20, 18)
+
+**Test Results:** ✅ ALL TESTS PASSED
+
+```
+✅ Critical Path: 3 activities (25.0%) - Status: warning
+✅ Near-Critical: 2 activities (16.7%)
+✅ Negative Float: 2 activities (16.7%) - Status: fail
+   Activities: ['A2010', 'A2000']
+✅ Float Ratio: 0.80 - Status: pass (within 0.5-1.5 range)
+✅ Statistics: Mean=12.17, Median=6.50, StdDev=19.57
+✅ Excessive Float: 0 activities (>50% of 127-day project)
+✅ Most Negative Float: -10.0 days
+✅ Distribution: 12 activities accounted for (2+3+2+3+2=12)
+✅ WBS Data: 10 WBS codes with float values for box plot
+✅ Issues: 2 float-related issues detected
+   [HIGH] Negative Float: 2 activities behind schedule
+   [MEDIUM] Excessive Critical Path: 25.0% of activities
+```
+
+**Verification:**
+- All 7 KPIs implemented and calculating correctly
+- All chart data structures populated
+- Issues created appropriately
+- Parser handles "Total Float(d)" column
+- Dashboard tab displays all visualizations
+
+#### DCMA Best Practices Implemented
+
+**Critical Path Percentage:**
+- Good: 5-15% (healthy schedule)
+- Warning: <5% (may indicate missing logic) or 15-20% (getting tight)
+- Fail: >20% (too many critical activities, high risk)
+
+**Float Ratio:**
+- Good: 0.5 - 1.5 (healthy flexibility)
+- Warning: <0.5 (too tight, low buffer) or >1.5 (too loose, missing logic)
+
+**Negative Float:**
+- Target: 0 activities
+- Any negative float indicates schedule delays requiring corrective action
+
+**Near-Critical Activities:**
+- Float 1-10 days require active monitoring
+- Can quickly become critical with minor delays
+
+**Files Modified:**
+- `src/analysis/dcma_analyzer.py` - Added `_analyze_comprehensive_float()` method (268 lines)
+- `pages/2_Analysis_Dashboard.py` - Added Float Analysis tab with 5 charts
+- `src/parsers/schedule_parser.py` - Enhanced column validation for P6 suffixes
+- `CHANGELOG.md` - Version 1.0.8 entry
+
+**Files Added:**
+- `test_float_analysis.py` - Comprehensive test for float analysis
+
+**Impact:**
+
+Project schedulers can now:
+- ✅ Identify critical path and near-critical activities at a glance
+- ✅ Detect schedule delays (negative float) immediately
+- ✅ Assess schedule health with float ratio metric
+- ✅ Compare float distribution across WBS codes
+- ✅ Download lists of problematic activities for corrective action
+- ✅ Follow DCMA best practices for float management
+- ✅ Make data-driven decisions about schedule risk and mitigation
+
+---
+
 ## [1.0.7] - 2025-11-02
 
 ### Fixed - Duration Analysis Now Excludes Milestones and Uses Only P6 Durations

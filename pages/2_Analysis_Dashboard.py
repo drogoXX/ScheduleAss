@@ -71,9 +71,10 @@ st.session_state.current_analysis = analysis
 st.markdown("---")
 
 # Create tabs for different views
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📈 Overview",
     "🔍 Detailed Metrics",
+    "⏱️ Float Analysis",
     "⚠️ Issues",
     "💡 Recommendations",
     "📋 Activities"
@@ -472,8 +473,343 @@ with tab2:
     else:
         st.info("No constraint data available")
 
-# Tab 3: Issues
+# Tab 3: Float Analysis
 with tab3:
+    st.markdown("## Comprehensive Total Float Analysis")
+
+    float_data = metrics.get('comprehensive_float', {})
+
+    if 'error' in float_data:
+        st.error(f"⚠️ {float_data['error']}")
+        st.info("Total Float column is required for float analysis. Please ensure your CSV export includes the 'Total Float(d)' column.")
+    else:
+        # Summary KPI Cards at the top
+        st.markdown("### 📊 Key Performance Indicators")
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        # KPI 1: Critical Path
+        critical_data = float_data.get('critical', {})
+        critical_count = critical_data.get('count', 0)
+        critical_pct = critical_data.get('percentage', 0)
+        critical_status = critical_data.get('status', 'unknown')
+
+        with col1:
+            if critical_status == 'good':
+                status_icon = "✓"
+                status_color = "green"
+            elif critical_status == 'warning':
+                status_icon = "⚠"
+                status_color = "orange"
+            else:
+                status_icon = "✗"
+                status_color = "red"
+
+            st.markdown(f"""
+            <div style="padding: 10px; border-left: 4px solid {status_color}; background-color: #f0f2f6; border-radius: 5px;">
+                <h4 style="margin: 0; color: {status_color};">{status_icon} Critical Path</h4>
+                <h2 style="margin: 5px 0;">{critical_count}</h2>
+                <p style="margin: 0; font-size: 14px;">{critical_pct:.1f}% of activities</p>
+                <p style="margin: 0; font-size: 12px; color: gray;">Target: 5-15%</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # KPI 2: Near-Critical
+        near_critical_data = float_data.get('near_critical', {})
+        near_critical_count = near_critical_data.get('count', 0)
+        near_critical_pct = near_critical_data.get('percentage', 0)
+
+        with col2:
+            st.markdown(f"""
+            <div style="padding: 10px; border-left: 4px solid orange; background-color: #f0f2f6; border-radius: 5px;">
+                <h4 style="margin: 0; color: orange;">⚠ Near-Critical</h4>
+                <h2 style="margin: 5px 0;">{near_critical_count}</h2>
+                <p style="margin: 0; font-size: 14px;">{near_critical_pct:.1f}% of activities</p>
+                <p style="margin: 0; font-size: 12px; color: gray;">Float: 1-10 days</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # KPI 3: Negative Float
+        negative_data = float_data.get('negative_float', {})
+        negative_count = negative_data.get('count', 0)
+        negative_pct = negative_data.get('percentage', 0)
+        negative_status = negative_data.get('status', 'unknown')
+
+        with col3:
+            if negative_status == 'good':
+                status_icon = "✓"
+                status_color = "green"
+            else:
+                status_icon = "✗"
+                status_color = "red"
+
+            st.markdown(f"""
+            <div style="padding: 10px; border-left: 4px solid {status_color}; background-color: #f0f2f6; border-radius: 5px;">
+                <h4 style="margin: 0; color: {status_color};">{status_icon} Behind Schedule</h4>
+                <h2 style="margin: 5px 0;">{negative_count}</h2>
+                <p style="margin: 0; font-size: 14px;">{negative_pct:.1f}% of activities</p>
+                <p style="margin: 0; font-size: 12px; color: gray;">Target: 0</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # KPI 4: Float Ratio
+        ratio_data = float_data.get('float_ratio', {})
+        ratio_value = ratio_data.get('ratio', 0)
+        ratio_status = ratio_data.get('status', 'unknown')
+
+        with col4:
+            if ratio_status == 'good':
+                status_icon = "✓"
+                status_color = "green"
+            elif ratio_status == 'warning':
+                status_icon = "⚠"
+                status_color = "orange"
+            else:
+                status_icon = "✗"
+                status_color = "red"
+
+            st.markdown(f"""
+            <div style="padding: 10px; border-left: 4px solid {status_color}; background-color: #f0f2f6; border-radius: 5px;">
+                <h4 style="margin: 0; color: {status_color};">{status_icon} Float Ratio</h4>
+                <h2 style="margin: 5px 0;">{ratio_value:.2f}</h2>
+                <p style="margin: 0; font-size: 14px;">Avg Float / Avg Duration</p>
+                <p style="margin: 0; font-size: 12px; color: gray;">Target: 0.5-1.5</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # Row 2: Charts
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # Chart 1: Float Distribution Histogram
+            st.markdown("#### Float Distribution Histogram")
+
+            distribution = float_data.get('distribution', {})
+            if distribution:
+                # Prepare data for histogram
+                categories = ['Negative\n(<0)', 'Critical\n(0)', 'Near-Critical\n(1-10)', 'Low Risk\n(11-30)', 'Comfortable\n(>30)']
+                counts = [
+                    distribution.get('negative', 0),
+                    distribution.get('critical', 0),
+                    distribution.get('near_critical', 0),
+                    distribution.get('low_risk', 0),
+                    distribution.get('comfortable', 0)
+                ]
+                colors = ['#e74c3c', '#f39c12', '#f1c40f', '#2ecc71', '#27ae60']
+
+                fig = go.Figure(data=[
+                    go.Bar(
+                        x=categories,
+                        y=counts,
+                        marker_color=colors,
+                        text=counts,
+                        textposition='auto',
+                        hovertemplate='<b>%{x}</b><br>Count: %{y}<extra></extra>'
+                    )
+                ])
+
+                fig.update_layout(
+                    xaxis_title="Float Range (days)",
+                    yaxis_title="Number of Activities",
+                    showlegend=False,
+                    height=400
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No distribution data available")
+
+        with col2:
+            # Chart 2: Critical Path Analysis Donut Chart
+            st.markdown("#### Critical Path Analysis")
+
+            if distribution:
+                labels = ['Critical (0)', 'Near-Critical (1-10)', 'Low Risk (11-30)', 'Comfortable (>30)']
+                values = [
+                    distribution.get('critical', 0),
+                    distribution.get('near_critical', 0),
+                    distribution.get('low_risk', 0),
+                    distribution.get('comfortable', 0)
+                ]
+                colors_donut = ['#e74c3c', '#f39c12', '#3498db', '#2ecc71']
+
+                fig = go.Figure(data=[
+                    go.Pie(
+                        labels=labels,
+                        values=values,
+                        hole=0.4,
+                        marker=dict(colors=colors_donut),
+                        textinfo='label+percent',
+                        hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>'
+                    )
+                ])
+
+                fig.update_layout(
+                    showlegend=True,
+                    height=400,
+                    legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05)
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No distribution data available")
+
+        st.markdown("---")
+
+        # Row 3: Additional Metrics and Box Plot
+        col1, col2 = st.columns([1, 2])
+
+        with col1:
+            # Additional Statistics
+            st.markdown("#### Statistical Summary")
+
+            stats = float_data.get('statistics', {})
+            mean_float = stats.get('mean', 0)
+            median_float = stats.get('median', 0)
+            std_float = stats.get('std_dev', 0)
+
+            st.metric("Mean Float", f"{mean_float:.1f} days")
+            st.metric("Median Float", f"{median_float:.1f} days")
+            st.metric("Std Deviation", f"{std_float:.1f} days")
+
+            # Most negative float
+            most_negative = float_data.get('most_negative', 0)
+            if most_negative < 0:
+                st.metric("Worst Delay", f"{most_negative:.1f} days",
+                         delta=None,
+                         help="Most negative float value")
+
+            # Excessive float
+            excessive_data = float_data.get('excessive_float', {})
+            excessive_count = excessive_data.get('count', 0)
+            if excessive_count > 0:
+                excessive_pct = excessive_data.get('percentage', 0)
+                st.metric("Excessive Float", f"{excessive_count}",
+                         delta=f"{excessive_pct:.1f}%",
+                         help="Activities with float >50% of project duration")
+
+        with col2:
+            # Chart 3: Float Box Plot by WBS Code
+            st.markdown("#### Float Distribution by WBS Code")
+
+            float_by_wbs = float_data.get('float_by_wbs', {})
+            if float_by_wbs and len(float_by_wbs) > 0:
+                # Prepare data for box plot
+                wbs_codes = list(float_by_wbs.keys())
+                float_values = list(float_by_wbs.values())
+
+                fig = go.Figure()
+
+                for wbs, floats in zip(wbs_codes, float_values):
+                    if floats:  # Only add if there are float values
+                        fig.add_trace(go.Box(
+                            y=floats,
+                            name=str(wbs),
+                            boxmean='sd',  # Show mean and standard deviation
+                            hovertemplate='<b>WBS: %{fullData.name}</b><br>Float: %{y:.1f} days<extra></extra>'
+                        ))
+
+                fig.update_layout(
+                    xaxis_title="WBS Code",
+                    yaxis_title="Total Float (days)",
+                    showlegend=False,
+                    height=400,
+                    xaxis={'categoryorder': 'total descending'}
+                )
+
+                # Add horizontal lines for thresholds
+                fig.add_hline(y=0, line_dash="dash", line_color="red",
+                             annotation_text="Critical", annotation_position="right")
+                fig.add_hline(y=10, line_dash="dash", line_color="orange",
+                             annotation_text="Near-Critical", annotation_position="right")
+
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No WBS data available for box plot")
+
+        st.markdown("---")
+
+        # Row 4: Negative Float Activities Table
+        if negative_count > 0:
+            st.markdown("#### 🔴 Activities with Negative Float (Behind Schedule)")
+
+            negative_activities = negative_data.get('activities', [])
+            if negative_activities:
+                # Limit to top 20
+                top_20 = negative_activities[:20]
+
+                df_negative = pd.DataFrame(top_20)
+
+                # Display as sortable table
+                st.dataframe(
+                    df_negative,
+                    use_container_width=True,
+                    height=400,
+                    column_config={
+                        "activity_id": st.column_config.TextColumn("Activity ID"),
+                        "activity_name": st.column_config.TextColumn("Activity Name", width="large"),
+                        "total_float": st.column_config.NumberColumn("Total Float (days)", format="%.1f"),
+                        "status": st.column_config.TextColumn("Status")
+                    }
+                )
+
+                if len(negative_activities) > 20:
+                    st.info(f"ℹ️ Showing top 20 of {len(negative_activities)} activities with negative float. Download full list below.")
+
+                # Download option
+                csv = df_negative.to_csv(index=False)
+                st.download_button(
+                    label="📥 Download Negative Float Activities (CSV)",
+                    data=csv,
+                    file_name=f"negative_float_activities_{schedule['file_name']}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+        else:
+            st.success("✅ No activities with negative float - schedule is on track!")
+
+        # Guidance Section
+        st.markdown("---")
+        st.markdown("#### 📖 Interpretation Guidance")
+
+        guidance_col1, guidance_col2 = st.columns(2)
+
+        with guidance_col1:
+            st.markdown("""
+            **Float Analysis Thresholds (DCMA Best Practices):**
+
+            - **Critical Path (0 days):** 5-15% of activities is normal
+                - <5%: May indicate missing logic or over-optimization
+                - >15%: Concerning - schedule may be too tightly constrained
+
+            - **Near-Critical (1-10 days):** Watch closely
+                - These activities can easily become critical
+                - Require active monitoring and mitigation planning
+
+            - **Negative Float:** Always investigate immediately
+                - Indicates activities are behind schedule
+                - Requires corrective action and recovery plan
+            """)
+
+        with guidance_col2:
+            st.markdown("""
+            **Float Ratio (Avg Float / Avg Remaining Duration):**
+
+            - **0.5 - 1.5:** Good - Healthy schedule flexibility
+            - **< 0.5:** Poor - Schedule may be too tight
+            - **> 1.5:** Poor - May indicate missing logic or unrealistic durations
+
+            **Excessive Float (>50% project duration):**
+
+            - May indicate missing predecessor/successor relationships
+            - Could suggest activities not properly integrated into schedule logic
+            - Review and add missing dependencies
+            """)
+
+# Tab 4: Issues
+with tab4:
     st.markdown("## Identified Issues")
 
     issues = analysis['issues']
@@ -515,8 +851,8 @@ with tab3:
             for issue in low:
                 display_issue_card(issue)
 
-# Tab 4: Recommendations
-with tab4:
+# Tab 5: Recommendations
+with tab5:
     st.markdown("## Recommendations")
 
     recommendations = analysis.get('recommendations', [])
@@ -556,8 +892,8 @@ with tab4:
         for i, rec in enumerate(filtered_recs, 1):
             display_recommendation_card(rec, i)
 
-# Tab 5: Activities
-with tab5:
+# Tab 6: Activities
+with tab6:
     st.markdown("## Activity Details")
 
     activities = schedule['schedule_data'].get('activities', [])
