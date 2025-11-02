@@ -162,35 +162,58 @@ class ScheduleParser:
     def _parse_relationships(self, df: pd.DataFrame) -> pd.DataFrame:
         """Parse predecessor and successor relationships"""
 
-        # Parse Predecessors
-        if 'Predecessors' in df.columns:
-            df['predecessor_list'] = df['Predecessors'].apply(
-                lambda x: self._parse_relationship_string(x) if pd.notna(x) else []
+        # Parse Predecessors - prioritize "Predecessor Details" which has full relationship notation
+        if 'Predecessor Details' in df.columns:
+            df['predecessor_list'] = df['Predecessor Details'].apply(
+                lambda x: self._parse_relationship_string(x, expect_full_format=True) if pd.notna(x) else []
             )
+        elif 'Predecessors' in df.columns:
+            # Fallback to simple Predecessors column (Activity IDs only, default to FS with 0 lag)
+            df['predecessor_list'] = df['Predecessors'].apply(
+                lambda x: self._parse_relationship_string(x, expect_full_format=False) if pd.notna(x) else []
+            )
+            self.warnings.append("Using 'Predecessors' column (Activity IDs only). Recommend using 'Predecessor Details' for full relationship information.")
         else:
             df['predecessor_list'] = [[] for _ in range(len(df))]
 
-        # Parse Successors
-        if 'Successors' in df.columns:
-            df['successor_list'] = df['Successors'].apply(
-                lambda x: self._parse_relationship_string(x) if pd.notna(x) else []
+        # Parse Successors - prioritize "Successor Details" which has full relationship notation
+        if 'Successor Details' in df.columns:
+            df['successor_list'] = df['Successor Details'].apply(
+                lambda x: self._parse_relationship_string(x, expect_full_format=True) if pd.notna(x) else []
             )
+        elif 'Successors' in df.columns:
+            # Fallback to simple Successors column (Activity IDs only, default to FS with 0 lag)
+            df['successor_list'] = df['Successors'].apply(
+                lambda x: self._parse_relationship_string(x, expect_full_format=False) if pd.notna(x) else []
+            )
+            self.warnings.append("Using 'Successors' column (Activity IDs only). Recommend using 'Successor Details' for full relationship information.")
         else:
             df['successor_list'] = [[] for _ in range(len(df))]
 
         return df
 
-    def _parse_relationship_string(self, rel_string: str) -> List[Dict]:
+    def _parse_relationship_string(self, rel_string: str, expect_full_format: bool = True) -> List[Dict]:
         """
         Parse relationship string into structured format
-        Example: 'A21740: FF 10, A21750: FS' -> [{'activity': 'A21740', 'type': 'FF', 'lag': 10}, ...]
+
+        Args:
+            rel_string: The relationship string to parse
+            expect_full_format: If True, expects "ActivityID: Type Lag" format (from Detail columns)
+                              If False, accepts "ActivityID" only (from simple columns)
+
+        Examples:
+            Full format: 'A21740: FF 10, A21750: FS, A21760: FS -5'
+            Simple format: 'A21740, A21750, A21760'
+
+        Returns:
+            List of relationship dictionaries with 'activity', 'type', and 'lag' keys
         """
         relationships = []
 
         if not rel_string or pd.isna(rel_string) or str(rel_string).lower() == 'nan':
             return relationships
 
-        # Split by comma
+        # Split by comma for multiple relationships
         parts = str(rel_string).split(',')
 
         for part in parts:
@@ -198,8 +221,13 @@ class ScheduleParser:
             if not part:
                 continue
 
-            # Try to match pattern: ActivityID: Type Lag
+            # Try to match full format: ActivityID: Type Lag
             # Examples: "A21740: FF 10", "A21750: FS", "A21760: FS -5"
+            # Pattern explanation:
+            # - ([A-Za-z0-9_-]+): Activity ID (letters, numbers, underscores, hyphens)
+            # - \s*:\s*: Colon with optional whitespace
+            # - ([A-Z]{2}): Relationship type (exactly 2 uppercase letters: FS, FF, SS, SF)
+            # - \s*([-]?\d+)?: Optional lag (negative or positive integer)
             match = re.match(r'([A-Za-z0-9_-]+)\s*:\s*([A-Z]{2})\s*([-]?\d+)?', part)
 
             if match:
@@ -212,8 +240,9 @@ class ScheduleParser:
                     'type': rel_type,
                     'lag': lag
                 })
-            else:
-                # Try simpler pattern: just ActivityID
+            elif not expect_full_format:
+                # Fallback for simple format (Activity ID only)
+                # Only use this for simple "Predecessors"/"Successors" columns
                 simple_match = re.match(r'([A-Za-z0-9_-]+)', part)
                 if simple_match:
                     relationships.append({
@@ -221,6 +250,9 @@ class ScheduleParser:
                         'type': 'FS',  # Default to Finish-to-Start
                         'lag': 0
                     })
+            else:
+                # If we expect full format but didn't match, log a warning
+                self.warnings.append(f"Could not parse relationship: '{part}'. Expected format: 'ActivityID: Type Lag'")
 
         return relationships
 
