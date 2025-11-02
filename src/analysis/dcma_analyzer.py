@@ -47,6 +47,7 @@ class DCMAAnalyzer:
         # Float Analysis
         self._analyze_high_float()
         self._analyze_float_ratio()
+        self._analyze_comprehensive_float()  # NEW - Comprehensive float analysis with all KPIs
 
         # Activity Distribution
         self._analyze_activity_distribution()
@@ -478,6 +479,275 @@ class DCMAAnalyzer:
                 self.metrics['float_ratio'] = {'ratio': 0, 'status': 'unknown'}
         else:
             self.metrics['float_ratio'] = {'ratio': 0, 'status': 'unknown'}
+
+    def _analyze_comprehensive_float(self):
+        """
+        Comprehensive Total Float analysis with all KPIs
+        Implements DCMA best practices for float analysis
+        """
+        if 'Total Float' not in self.df.columns:
+            self.metrics['comprehensive_float'] = {
+                'error': 'Total Float column not found',
+                'status': 'unknown'
+            }
+            self.warnings.append("⚠️  'Total Float' column not found. Float analysis cannot be performed.")
+            return
+
+        # Get total float values, excluding NaN
+        float_series = self.df['Total Float'].dropna()
+        total_activities = len(float_series)
+
+        if total_activities == 0:
+            self.metrics['comprehensive_float'] = {
+                'error': 'No Total Float data available',
+                'status': 'unknown'
+            }
+            return
+
+        # Calculate project duration for context
+        project_duration = 0
+        if 'Start' in self.df.columns and 'Finish' in self.df.columns:
+            project_duration = (self.df['Finish'].max() - self.df['Start'].min()).days
+
+        # KPI 1: Critical Path (float = 0)
+        critical_mask = float_series == 0
+        critical_count = critical_mask.sum()
+        critical_pct = (critical_count / total_activities * 100) if total_activities > 0 else 0
+
+        critical_activities = []
+        if critical_count > 0:
+            critical_idx = float_series[critical_mask].index
+            for idx in critical_idx[:20]:  # Limit to top 20
+                row = self.df.loc[idx]
+                critical_activities.append({
+                    'activity_id': row['Activity ID'],
+                    'activity_name': row['Activity Name'],
+                    'total_float': 0
+                })
+
+        # KPI 2: Near-Critical (0 < float ≤ 10)
+        near_critical_mask = (float_series > 0) & (float_series <= 10)
+        near_critical_count = near_critical_mask.sum()
+        near_critical_pct = (near_critical_count / total_activities * 100) if total_activities > 0 else 0
+
+        near_critical_activities = []
+        if near_critical_count > 0:
+            near_critical_idx = float_series[near_critical_mask].index
+            for idx in near_critical_idx[:20]:
+                row = self.df.loc[idx]
+                near_critical_activities.append({
+                    'activity_id': row['Activity ID'],
+                    'activity_name': row['Activity Name'],
+                    'total_float': float(row['Total Float'])
+                })
+
+        # KPI 3: Negative Float (behind schedule)
+        negative_mask = float_series < 0
+        negative_count = negative_mask.sum()
+        negative_pct = (negative_count / total_activities * 100) if total_activities > 0 else 0
+
+        negative_activities = []
+        if negative_count > 0:
+            # Sort by float (most negative first)
+            negative_float = float_series[negative_mask].sort_values()
+            for idx in negative_float.index[:20]:  # Top 20 worst
+                row = self.df.loc[idx]
+                negative_activities.append({
+                    'activity_id': row['Activity ID'],
+                    'activity_name': row['Activity Name'],
+                    'total_float': float(row['Total Float']),
+                    'wbs_code': row.get('WBS Code', 'N/A')
+                })
+
+        # KPI 4: Float Ratio (Average Total Float / Average Remaining Duration)
+        avg_float = float_series.mean()
+
+        # For remaining duration, use At Completion Duration for not started/in progress activities
+        remaining_duration = 0
+        if 'At Completion Duration' in self.df.columns and 'Activity Status' in self.df.columns:
+            not_complete = self.df['Activity Status'] != 'Completed'
+            remaining_durations = self.df.loc[not_complete, 'At Completion Duration'].dropna()
+            avg_remaining = remaining_durations.mean() if len(remaining_durations) > 0 else 0
+            float_ratio = avg_float / avg_remaining if avg_remaining > 0 else 0
+        else:
+            # Fallback to using total duration
+            if 'At Completion Duration' in self.df.columns:
+                avg_duration = self.df['At Completion Duration'].mean()
+                float_ratio = avg_float / avg_duration if avg_duration > 0 else 0
+                avg_remaining = avg_duration
+            else:
+                float_ratio = 0
+                avg_remaining = 0
+
+        # KPI 5: Statistical measures
+        median_float = float_series.median()
+        std_float = float_series.std()
+
+        # KPI 6: Excessive Float (>50% of project duration)
+        if project_duration > 0:
+            excessive_threshold = project_duration * 0.5
+            excessive_mask = float_series > excessive_threshold
+            excessive_count = excessive_mask.sum()
+            excessive_pct = (excessive_count / total_activities * 100) if total_activities > 0 else 0
+
+            excessive_activities = []
+            if excessive_count > 0:
+                excessive_idx = float_series[excessive_mask].index
+                for idx in excessive_idx[:20]:
+                    row = self.df.loc[idx]
+                    excessive_activities.append({
+                        'activity_id': row['Activity ID'],
+                        'activity_name': row['Activity Name'],
+                        'total_float': float(row['Total Float'])
+                    })
+        else:
+            excessive_count = 0
+            excessive_pct = 0
+            excessive_threshold = 0
+            excessive_activities = []
+
+        # KPI 7: Most negative float (worst delay)
+        most_negative = float(float_series.min()) if len(float_series) > 0 else 0
+
+        # Float Distribution for histogram
+        float_distribution = {
+            'negative': int(negative_count),           # < 0 (Behind)
+            'critical': int(critical_count),           # = 0 (Critical)
+            'near_critical': int(near_critical_count), # 1-10 (Near-critical)
+            'low_risk': int(((float_series > 10) & (float_series <= 30)).sum()),  # 11-30
+            'comfortable': int((float_series > 30).sum())  # > 30
+        }
+
+        # Float by WBS Code for box plot
+        float_by_wbs = {}
+        if 'WBS Code' in self.df.columns:
+            wbs_groups = self.df.groupby('WBS Code')['Total Float'].apply(list).to_dict()
+            # Limit to top 10 WBS codes by activity count
+            wbs_counts = self.df['WBS Code'].value_counts().head(10)
+            float_by_wbs = {wbs: wbs_groups.get(wbs, []) for wbs in wbs_counts.index}
+
+        # Store comprehensive metrics
+        self.metrics['comprehensive_float'] = {
+            # KPI Summary
+            'total_activities': total_activities,
+            'project_duration': project_duration,
+
+            # Critical Path (KPI 1)
+            'critical': {
+                'count': int(critical_count),
+                'percentage': round(critical_pct, 2),
+                'activities': critical_activities,
+                'status': 'warning' if critical_pct > 15 else 'pass',
+                'target': '≤15%'
+            },
+
+            # Near-Critical (KPI 2)
+            'near_critical': {
+                'count': int(near_critical_count),
+                'percentage': round(near_critical_pct, 2),
+                'activities': near_critical_activities
+            },
+
+            # Negative Float (KPI 3)
+            'negative_float': {
+                'count': int(negative_count),
+                'percentage': round(negative_pct, 2),
+                'activities': negative_activities,
+                'status': 'fail' if negative_count > 0 else 'pass',
+                'severity': 'high' if negative_count > 0 else 'none'
+            },
+
+            # Float Ratio (KPI 4)
+            'float_ratio': {
+                'ratio': round(float_ratio, 2),
+                'avg_float': round(avg_float, 2),
+                'avg_remaining_duration': round(avg_remaining, 2),
+                'target_range': [0.5, 1.5],
+                'status': 'pass' if 0.5 <= float_ratio <= 1.5 else 'warning'
+            },
+
+            # Statistical Measures (KPI 5)
+            'statistics': {
+                'mean': round(avg_float, 2),
+                'median': round(median_float, 2),
+                'std_dev': round(std_float, 2),
+                'min': round(float_series.min(), 2),
+                'max': round(float_series.max(), 2)
+            },
+
+            # Excessive Float (KPI 6)
+            'excessive_float': {
+                'count': int(excessive_count),
+                'percentage': round(excessive_pct, 2),
+                'threshold': round(excessive_threshold, 2),
+                'activities': excessive_activities,
+                'status': 'warning' if excessive_count > 0 else 'pass'
+            },
+
+            # Most Negative (KPI 7)
+            'most_negative': round(most_negative, 2),
+
+            # Distribution for charts
+            'distribution': float_distribution,
+            'float_by_wbs': float_by_wbs
+        }
+
+        # Create issues based on float analysis
+        # Issue 1: Negative Float (High Priority)
+        if negative_count > 0:
+            self.issues.append({
+                'category': 'Schedule Performance',
+                'severity': 'high',
+                'title': f'Negative Float: {negative_count} activities behind schedule',
+                'description': f'Found {negative_count} activities ({negative_pct:.1f}%) with negative float. Most negative: {most_negative:.0f} days. These activities are behind schedule and threatening project completion.',
+                'count': int(negative_count),
+                'recommendation': 'Immediate action required: Review critical path, crash activities, add resources, or negotiate deadline extensions. Focus on activities with most negative float first.',
+                'affected_activities': [a['activity_id'] for a in negative_activities]
+            })
+
+        # Issue 2: Excessive Critical Path
+        if critical_pct > 15:
+            self.issues.append({
+                'category': 'Schedule Risk',
+                'severity': 'medium',
+                'title': f'Excessive Critical Path: {critical_pct:.1f}% of activities',
+                'description': f'Found {critical_count} critical activities ({critical_pct:.1f}%). DCMA recommends ≤15% critical activities. High critical percentage indicates limited schedule flexibility.',
+                'count': int(critical_count),
+                'recommendation': 'Review schedule logic to add flexibility. Consider: parallel paths, reducing activity dependencies, adding float through early starts, or breaking down critical activities.',
+                'affected_activities': [a['activity_id'] for a in critical_activities[:10]]
+            })
+
+        # Issue 3: Poor Float Ratio
+        if float_ratio < 0.5 or float_ratio > 1.5:
+            severity = 'high' if float_ratio < 0.3 or float_ratio > 2.0 else 'medium'
+            if float_ratio < 0.5:
+                desc = f'Float Ratio is {float_ratio:.2f}, below target range (0.5-1.5). Schedule has insufficient float relative to remaining work.'
+                rec = 'Schedule is too tight. Consider: extending timeline, reducing scope, adding resources, or parallelizing work to add float.'
+            else:
+                desc = f'Float Ratio is {float_ratio:.2f}, above target range (0.5-1.5). Excessive float may indicate missing logic or unrealistic schedule.'
+                rec = 'Review schedule logic. Excessive float often indicates: missing dependencies, incorrect constraints, or overly conservative durations.'
+
+            self.issues.append({
+                'category': 'Schedule Health',
+                'severity': severity,
+                'title': f'Poor Float Ratio: {float_ratio:.2f}',
+                'description': desc,
+                'count': 1,
+                'recommendation': rec,
+                'affected_activities': []
+            })
+
+        # Issue 4: Excessive Float Activities
+        if excessive_count > 0 and excessive_pct > 10:
+            self.issues.append({
+                'category': 'Logic Quality',
+                'severity': 'low',
+                'title': f'Excessive Float: {excessive_count} activities with >50% project duration float',
+                'description': f'Found {excessive_count} activities ({excessive_pct:.1f}%) with float exceeding {excessive_threshold:.0f} days (50% of project duration). May indicate missing logic links.',
+                'count': int(excessive_count),
+                'recommendation': 'Review activities with excessive float for missing predecessors/successors. Verify logic relationships are complete.',
+                'affected_activities': [a['activity_id'] for a in excessive_activities[:10]]
+            })
 
     def _analyze_activity_distribution(self):
         """Analyze activity distribution over time"""

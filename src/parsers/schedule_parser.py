@@ -107,12 +107,30 @@ class ScheduleParser:
         df_columns = df.columns.tolist()
         missing_columns = []
 
+        # Helper function to normalize column name for matching
+        def normalize_for_matching(col_name):
+            """Normalize column name by removing P6 unit suffixes"""
+            normalized = col_name.strip()
+            # Remove P6 suffixes: (d), (h), (%), etc.
+            normalized = re.sub(r'\s*\([dhwmy%]+\)\s*$', '', normalized, flags=re.IGNORECASE)
+            normalized = re.sub(r'\s*\(days?\)\s*$', '', normalized, flags=re.IGNORECASE)
+            normalized = re.sub(r'\s*\(hours?\)\s*$', '', normalized, flags=re.IGNORECASE)
+            normalized = re.sub(r'\s*\(weeks?\)\s*$', '', normalized, flags=re.IGNORECASE)
+            normalized = re.sub(r'\s*\(months?\)\s*$', '', normalized, flags=re.IGNORECASE)
+            normalized = re.sub(r'\s*\(years?\)\s*$', '', normalized, flags=re.IGNORECASE)
+            return normalized.strip()
+
         for req_col in self.REQUIRED_COLUMNS:
             if req_col not in df_columns:
-                # Try case-insensitive match
+                # Try case-insensitive match and normalized match (without P6 suffixes)
                 found = False
                 for col in df_columns:
+                    # Exact case-insensitive match
                     if col.lower() == req_col.lower():
+                        found = True
+                        break
+                    # Normalized match (e.g., "Total Float(d)" matches "Total Float")
+                    if normalize_for_matching(col).lower() == req_col.lower():
                         found = True
                         break
                 if not found:
