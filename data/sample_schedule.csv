@@ -1,0 +1,26 @@
+Activity ID,Activity Name,Activity Status,WBS Code,At Completion Duration,Start,Finish,Free Float,Total Float,Predecessors,Predecessor Details,Successors,Successor Details,Primary Constraint,Activity Type,Duration Type,Resource Names
+A1000,Project Start,Completed,1.0,0,2025-01-01,2025-01-01,0,0,,,A1010: FS,A1010,As Late As Possible,Start Milestone,Fixed Duration & Units,
+A1010,Site Mobilization,Completed,1.1.1,15,2025-01-02,2025-01-21,0,0,A1000: FS,A1000,A1020: FS; A1030: FS,A1020; A1030,As Late As Possible,Task Dependent,Fixed Duration & Units,Site Manager; Crew
+A1020,Temporary Facilities Setup,In Progress,1.1.2,10,2025-01-22,2025-02-05,2,2,A1010: FS,A1010,A1040: FS,A1040,As Late As Possible,Task Dependent,Fixed Duration & Units,Construction Crew
+A1030,Safety Training,Completed,1.1.3,3,2025-01-22,2025-01-24,0,5,A1010: FS,A1010,A1050: FS,A1050,As Late As Possible,Task Dependent,Fixed Duration & Units,Safety Officer
+A1040,Survey and Layout,Not Started,1.2.1,8,2025-02-06,2025-02-17,0,0,A1020: FS,A1020,A1060: FS,A1060,As Late As Possible,Task Dependent,Fixed Duration & Units,Survey Crew
+A1050,Site Access Roads,In Progress,1.2.2,12,2025-01-25,2025-02-10,5,8,A1030: FS,A1030,A1070: FS,A1070,As Late As Possible,Task Dependent,Fixed Duration & Units,Civil Crew
+A1060,Foundation Excavation,Not Started,2.1.1,20,2025-02-18,2025-03-17,0,0,A1040: FS,A1040,A1070: FS; A1080: FS,A1070; A1080,As Late As Possible,Task Dependent,Fixed Duration & Units,Excavation Crew
+A1070,Foundation Formwork,Not Started,2.1.2,15,2025-03-18,2025-04-07,0,0,"A1060: FS, A1050: FS","A1060, A1050",A1080: FS,A1080,As Late As Possible,Task Dependent,Fixed Duration & Units,Formwork Team
+A1080,Foundation Concrete,Not Started,2.1.3,5,2025-04-08,2025-04-14,0,0,"A1070: FS, A1060: FF -3","A1070, A1060",A1090: FS 7,A1090,As Late As Possible,Task Dependent,Fixed Duration & Units,Concrete Team
+A1090,Foundation Curing,Not Started,2.1.4,7,2025-04-22,2025-04-30,0,0,A1080: FS 7,A1080,A1100: FS,A1100,As Late As Possible,Task Dependent,Fixed Duration & Units,
+A1100,Structural Steel Erection,Not Started,2.2.1,45,2025-05-01,2025-06-30,0,0,A1090: FS,A1090,A1110: FS,A1110,As Late As Possible,Task Dependent,Fixed Duration & Units,Steel Crew; Crane Operator
+A1110,Equipment Installation Area 1,Not Started,3.1.1,25,2025-07-01,2025-08-04,0,0,A1100: FS,A1100,A1120: FS,A1120,As Late As Possible,Task Dependent,Fixed Duration & Units,Installation Team
+A1120,Piping Installation Area 1,Not Started,3.1.2,30,2025-08-05,2025-09-12,0,0,A1110: FS,A1110,A1130: FS,A1130,As Late As Possible,Task Dependent,Fixed Duration & Units,Piping Crew
+A1130,Electrical Installation Area 1,Not Started,3.2.1,20,2025-09-13,2025-10-08,0,0,A1120: FS,A1120,A1140: SS 5,A1140,As Late As Possible,Task Dependent,Fixed Duration & Units,Electricians
+A1140,Instrumentation Area 1,Not Started,3.2.2,18,2025-09-18,2025-10-10,0,0,A1130: SS 5,A1130,A1150: FS,A1150,As Late As Possible,Task Dependent,Fixed Duration & Units,I&C Team
+A1150,Pre-Commissioning Checks,Not Started,4.1.1,10,2025-10-11,2025-10-24,0,0,A1140: FS,A1140,A1160: FS,A1160,As Late As Possible,Task Dependent,Fixed Duration & Units,Commissioning Team
+A1160,System Testing,Not Started,4.1.2,15,2025-10-25,2025-11-13,0,0,A1150: FS,A1150,A1170: FS,A1170,As Late As Possible,Task Dependent,Fixed Duration & Units,Testing Team
+A1170,Performance Testing,Not Started,4.2.1,8,2025-11-14,2025-11-25,0,0,A1160: FS,A1160,A1180: FS,A1180,As Late As Possible,Task Dependent,Fixed Duration & Units,Performance Team
+A1180,Punch List Completion,Not Started,4.3.1,12,2025-11-26,2025-12-11,0,0,A1170: FS,A1170,A1190: FS,A1190,As Late As Possible,Task Dependent,Fixed Duration & Units,Various
+A1190,Final Inspection,Not Started,4.3.2,3,2025-12-12,2025-12-16,0,0,A1180: FS,A1180,A1200: FS,A1200,As Late As Possible,Task Dependent,Fixed Duration & Units,Inspector
+A1200,Project Closeout,Not Started,5.0,5,2025-12-17,2025-12-23,0,0,A1190: FS,A1190,A1210: FS,A1210,As Late As Possible,Task Dependent,Fixed Duration & Units,Project Manager
+A1210,Project Complete,Not Started,5.1,0,2025-12-23,2025-12-23,0,0,A1200: FS,A1200,,,As Late As Possible,Finish Milestone,Fixed Duration & Units,
+A2000,Procurement Long Lead Items,In Progress,1.3.1,90,2025-01-15,2025-05-15,45,45,,,A1100: SS -15,A1100,Must Start On,Task Dependent,Fixed Duration & Units,Procurement Team
+A2010,Engineering Design Review,Completed,1.3.2,20,2025-01-01,2025-01-28,10,15,,,A1060: SS -10,A1060,As Late As Possible,Task Dependent,Fixed Duration & Units,Engineering Team
+A2020,Safety Inspection Milestone,Not Started,1.4.1,0,2025-06-15,2025-06-15,0,5,,,A1150: SS -30,A1150,Finish On,Finish Milestone,Fixed Duration & Units,Safety Inspector
