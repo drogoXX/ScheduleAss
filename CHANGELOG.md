@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.0.4.1] - 2025-11-02
+
+### Fixed - IndexError in Negative Duration Detection (HOTFIX)
+
+**Critical Bug:** IndexingError when analyzing schedules with negative durations
+
+**Error:**
+```
+IndexingError: Unalignable boolean Series provided as indexer
+File src/analysis/dcma_analyzer.py, line 320, in _analyze_average_duration
+```
+
+**Root Cause:** Using boolean mask from filtered Series to index original DataFrame with misaligned indices.
+
+**Fix:** Use proper index alignment:
+```python
+negative_indices = durations[durations < 0].index
+affected_activity_ids = list(self.df.loc[negative_indices, 'Activity ID'].values)
+```
+
+**Test Results:** ✅ All tests passed
+- No IndexError
+- Correctly detects 2/5 negative durations
+- Identifies affected activities: ['A1020', 'A1030']
+- Returns positive average using absolute values
+
+**Files Modified:**
+- `src/analysis/dcma_analyzer.py` - Fixed indexing bug
+
+**Files Added:**
+- `test_negative_durations.py` - Test script with negative durations
+
+---
+
 ## [1.0.4] - 2025-11-02
 
 ### Fixed - Data Quality Issues & Enhanced Diagnostics
