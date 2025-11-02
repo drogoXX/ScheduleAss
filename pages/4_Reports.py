@@ -86,20 +86,25 @@ with col1:
 
 with col2:
     st.markdown("#### Analysis Summary")
-    health_score = analysis['health_score']
 
-    # Get performance metrics if available
-    if 'performance_metrics' in analysis:
-        perf_metrics = analysis['performance_metrics']
-        health_data = perf_metrics.get('health_score', {})
-        rating = health_data.get('rating', 'Unknown')
-    else:
-        rating = 'Unknown'
+    try:
+        health_score = analysis.get('health_score', 0)
 
-    st.write(f"**Health Score:** {health_score:.1f}/100")
-    st.write(f"**Rating:** {rating}")
-    st.write(f"**Issues Found:** {len(analysis['issues'])}")
-    st.write(f"**Recommendations:** {len(analysis.get('recommendations', []))}")
+        # Get performance metrics if available
+        if 'performance_metrics' in analysis:
+            perf_metrics = analysis['performance_metrics']
+            health_data = perf_metrics.get('health_score', {})
+            rating = health_data.get('rating', 'Unknown')
+        else:
+            rating = 'Unknown'
+
+        st.write(f"**Health Score:** {health_score:.1f}/100")
+        st.write(f"**Rating:** {rating}")
+        st.write(f"**Issues Found:** {len(analysis.get('issues', []))}")
+        st.write(f"**Recommendations:** {len(analysis.get('recommendations', []))}")
+    except Exception as e:
+        st.error(f"Error loading analysis summary: {str(e)}")
+        st.info("This may occur if the analysis was created with an older version of the application. Please re-analyze the schedule.")
 
 st.markdown("---")
 
