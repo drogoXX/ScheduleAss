@@ -285,8 +285,43 @@ class ScheduleParser:
             df['has_hard_constraint'] = df['Primary Constraint'].apply(
                 lambda x: str(x) in hard_constraints if pd.notna(x) else False
             )
+
+            # Categorize ALL constraint types
+            def categorize_constraint(constraint):
+                """Categorize constraint into Hard, Flexible, or Schedule-Driven"""
+                if pd.isna(constraint):
+                    return 'None'
+
+                constraint_str = str(constraint).strip()
+
+                # Hard constraints - specific date required
+                hard = ['Must Start On', 'Must Finish On', 'Start On', 'Finish On',
+                       'Mandatory Start', 'Mandatory Finish']
+                if constraint_str in hard:
+                    return 'Hard'
+
+                # Flexible constraints - date boundaries
+                flexible = ['Start On or After', 'Start On or Before',
+                           'Finish On or After', 'Finish On or Before']
+                if constraint_str in flexible:
+                    return 'Flexible'
+
+                # Schedule-driven - ALAP, ASAP
+                schedule_driven = ['As Late As Possible', 'As Soon As Possible']
+                if constraint_str in schedule_driven:
+                    return 'Schedule-Driven'
+
+                # Other/Unknown
+                return 'Other'
+
+            df['constraint_category'] = df['Primary Constraint'].apply(categorize_constraint)
+
+            # Flag activities with ANY constraint (excluding None)
+            df['has_any_constraint'] = df['constraint_category'] != 'None'
         else:
             df['has_hard_constraint'] = False
+            df['constraint_category'] = 'None'
+            df['has_any_constraint'] = False
 
         # Identify long duration activities (>20 days)
         if 'At Completion Duration' in df.columns:

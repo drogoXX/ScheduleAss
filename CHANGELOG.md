@@ -1,5 +1,114 @@
 # Changelog
 
+## [1.0.5] - 2025-11-02
+
+### Added - Comprehensive Constraint Tracking
+
+**Feature Request:** Track ALL constraint types including "As Late As Possible" (ALAP)
+
+**Implementation:**
+
+#### Parser Enhancement (`src/parsers/schedule_parser.py`)
+
+Added comprehensive constraint categorization:
+
+**Constraint Categories:**
+1. **Hard** - Specific date required
+   - Must Start On, Must Finish On
+   - Start On, Finish On
+   - Mandatory Start, Mandatory Finish
+
+2. **Flexible** - Date boundaries
+   - Start On or After, Start On or Before
+   - Finish On or After, Finish On or Before
+
+3. **Schedule-Driven** - Logic-based
+   - As Late As Possible (ALAP)
+   - As Soon As Possible (ASAP)
+
+4. **Other** - Unknown constraint types
+
+**New Fields Added:**
+- `constraint_category` - Categorizes each activity's constraint
+- `has_any_constraint` - Boolean flag for any constraint (except None)
+
+#### Analyzer Enhancement (`src/analysis/dcma_analyzer.py`)
+
+Completely rewrote `_analyze_hard_constraints()` to track ALL constraint types:
+
+**New Metrics Structure:**
+```python
+metrics['constraints'] = {
+    'total_count': X,
+    'total_percentage': Y%,
+    'by_category': {
+        'Hard': {'count': X, 'percentage': Y%, 'activities': [...]},
+        'Flexible': {'count': X, 'percentage': Y%, 'activities': [...]},
+        'Schedule-Driven': {'count': X, 'percentage': Y%, 'activities': [...]},
+        'Other': {'count': X, 'percentage': Y%, 'activities': [...]}
+    },
+    'guidance': 'Constraints should be minimized and duly justified'
+}
+```
+
+**Issue Detection:**
+- Hard constraints >10%: High severity
+- Flexible constraints >15%: Medium severity
+- Schedule-Driven >50%: Low severity (informational)
+
+#### Dashboard Enhancements
+
+**Overview Tab (`pages/2_Analysis_Dashboard.py`):**
+- Changed "Hard Constraints %" to "Activities with Constraints"
+- Shows total percentage of ALL constrained activities
+- Tooltip: "All constraint types (should be minimized and justified)"
+
+**Detailed Metrics Tab:**
+
+Added comprehensive "Constraints Analysis" section with:
+
+1. **Summary Metrics** (4 columns):
+   - Total Constrained (count + percentage)
+   - Hard Constraints (count + percentage)
+   - Flexible Constraints (count + percentage)
+   - Schedule-Driven (count + percentage)
+
+2. **Visual Breakdown**:
+   - Pie chart showing distribution by category
+   - Guidance text: "Constraints should be minimized and duly justified"
+   - Category descriptions with usage recommendations
+
+3. **Detailed Tables** (4 tabs):
+   - Hard: List with warning if any exist
+   - Flexible: List with info message
+   - Schedule-Driven: List with info message
+   - All: Combined list with download button
+
+**Test Results:** ✅ All tests passed
+
+Sample data (28 activities):
+- Hard: 2 activities (7.1%)
+- Flexible: 0 activities (0.0%)
+- Schedule-Driven: 26 activities (92.9%)
+- Total Constrained: 28 (100%)
+
+**User Guidance:**
+
+Constraints should be "as low as reasonably possible and in case duly justified":
+- Hard constraints: Use only when contractually mandated
+- Flexible constraints: Should be justified by project requirements
+- Schedule-Driven: Generally acceptable but review if excessive
+
+**Files Modified:**
+- `src/parsers/schedule_parser.py` - Added constraint categorization
+- `src/analysis/dcma_analyzer.py` - Comprehensive constraint tracking
+- `pages/2_Analysis_Dashboard.py` - Enhanced constraint display (both tabs)
+
+**Files Added:**
+- `test_constraints.py` - Constraint tracking test script
+
+---
+
 ## [1.0.4.1] - 2025-11-02
 
 ### Fixed - IndexError in Negative Duration Detection (HOTFIX)

@@ -147,40 +147,127 @@ class DCMAAnalyzer:
             })
 
     def _analyze_hard_constraints(self):
-        """Analyze hard constraints (mandatory dates)"""
-        hard_constraints = []
+        """Analyze constraints - ALL types including ALAP"""
+        total_activities = len(self.df)
 
-        if 'has_hard_constraint' in self.df.columns:
-            constrained = self.df[self.df['has_hard_constraint'] == True]
+        # Initialize constraint tracking
+        constraints_by_category = {
+            'Hard': [],
+            'Flexible': [],
+            'Schedule-Driven': [],
+            'Other': []
+        }
+        all_constrained_activities = []
+
+        if 'constraint_category' in self.df.columns:
+            # Get all activities with ANY constraint (not 'None')
+            constrained = self.df[self.df['has_any_constraint'] == True]
 
             for idx, row in constrained.iterrows():
-                hard_constraints.append({
+                constraint_info = {
                     'activity_id': row['Activity ID'],
                     'activity_name': row['Activity Name'],
-                    'constraint_type': row.get('Primary Constraint', 'Unknown')
-                })
+                    'constraint_type': row.get('Primary Constraint', 'Unknown'),
+                    'category': row.get('constraint_category', 'Unknown')
+                }
 
-        total_activities = len(self.df)
-        percentage = (len(hard_constraints) / total_activities * 100) if total_activities > 0 else 0
+                all_constrained_activities.append(constraint_info)
 
-        self.metrics['hard_constraints'] = {
-            'count': len(hard_constraints),
+                # Categorize by type
+                category = row.get('constraint_category', 'Other')
+                if category in constraints_by_category:
+                    constraints_by_category[category].append(constraint_info)
+
+        # Calculate percentages
+        total_constrained = len(all_constrained_activities)
+        total_percentage = (total_constrained / total_activities * 100) if total_activities > 0 else 0
+
+        hard_count = len(constraints_by_category['Hard'])
+        hard_percentage = (hard_count / total_activities * 100) if total_activities > 0 else 0
+
+        flexible_count = len(constraints_by_category['Flexible'])
+        flexible_percentage = (flexible_count / total_activities * 100) if total_activities > 0 else 0
+
+        schedule_driven_count = len(constraints_by_category['Schedule-Driven'])
+        schedule_driven_percentage = (schedule_driven_count / total_activities * 100) if total_activities > 0 else 0
+
+        # Store comprehensive metrics
+        self.metrics['constraints'] = {
+            'total_count': total_constrained,
+            'total_percentage': round(total_percentage, 2),
+            'by_category': {
+                'Hard': {
+                    'count': hard_count,
+                    'percentage': round(hard_percentage, 2),
+                    'activities': constraints_by_category['Hard']
+                },
+                'Flexible': {
+                    'count': flexible_count,
+                    'percentage': round(flexible_percentage, 2),
+                    'activities': constraints_by_category['Flexible']
+                },
+                'Schedule-Driven': {
+                    'count': schedule_driven_count,
+                    'percentage': round(schedule_driven_percentage, 2),
+                    'activities': constraints_by_category['Schedule-Driven']
+                },
+                'Other': {
+                    'count': len(constraints_by_category['Other']),
+                    'percentage': round((len(constraints_by_category['Other']) / total_activities * 100), 2) if total_activities > 0 else 0,
+                    'activities': constraints_by_category['Other']
+                }
+            },
+            'all_activities': all_constrained_activities,
             'total_activities': total_activities,
-            'percentage': round(percentage, 2),
-            'activities': hard_constraints,
-            'target': 10.0,
-            'status': 'pass' if percentage <= 10.0 else 'fail'
+            'guidance': 'Constraints should be minimized and duly justified',
+            'status': 'warning' if total_percentage > 20 else 'pass'
         }
 
-        if percentage > 10.0:
+        # Keep legacy hard_constraints metric for compatibility
+        self.metrics['hard_constraints'] = {
+            'count': hard_count,
+            'total_activities': total_activities,
+            'percentage': round(hard_percentage, 2),
+            'activities': constraints_by_category['Hard'],
+            'target': 10.0,
+            'status': 'pass' if hard_percentage <= 10.0 else 'fail'
+        }
+
+        # Create issues for excessive constraints
+        # Hard constraints should be minimal
+        if hard_percentage > 10.0:
             self.issues.append({
                 'category': 'Schedule Flexibility',
                 'severity': 'high',
-                'title': f'Excessive Hard Constraints: {percentage:.1f}%',
-                'description': f'Found {len(hard_constraints)} hard constraints ({percentage:.1f}% of activities). Target is ≤10%.',
-                'count': len(hard_constraints),
-                'recommendation': 'Remove unnecessary mandatory constraints. Use logic-driven scheduling instead of date constraints.',
-                'affected_activities': [hc['activity_id'] for hc in hard_constraints]
+                'title': f'Excessive Hard Constraints: {hard_percentage:.1f}%',
+                'description': f'Found {hard_count} hard date constraints ({hard_percentage:.1f}% of activities). Hard constraints (Must/On dates) significantly reduce schedule flexibility and should be minimized.',
+                'count': hard_count,
+                'recommendation': 'Review and remove unnecessary hard date constraints. Use logic-driven scheduling instead. Each constraint should be duly justified by contractual or regulatory requirements.',
+                'affected_activities': [c['activity_id'] for c in constraints_by_category['Hard']]
+            })
+
+        # Flexible constraints warning
+        if flexible_percentage > 15.0:
+            self.issues.append({
+                'category': 'Schedule Flexibility',
+                'severity': 'medium',
+                'title': f'High Flexible Constraints: {flexible_percentage:.1f}%',
+                'description': f'Found {flexible_count} flexible date constraints ({flexible_percentage:.1f}% of activities). These "On or Before/After" constraints limit scheduling flexibility.',
+                'count': flexible_count,
+                'recommendation': 'Review flexible constraints and remove those that are not duly justified. Consider using logic relationships instead.',
+                'affected_activities': [c['activity_id'] for c in constraints_by_category['Flexible']]
+            })
+
+        # Schedule-driven informational (if very high)
+        if schedule_driven_percentage > 50.0:
+            self.issues.append({
+                'category': 'Schedule Setup',
+                'severity': 'low',
+                'title': f'High Schedule-Driven Constraints: {schedule_driven_percentage:.1f}%',
+                'description': f'Found {schedule_driven_count} schedule-driven constraints ({schedule_driven_percentage:.1f}% of activities). While ALAP/ASAP are not date constraints, high usage may indicate over-reliance on these settings.',
+                'count': schedule_driven_count,
+                'recommendation': 'Review schedule-driven constraints. Consider if activities should be unconstrained to allow more schedule flexibility.',
+                'affected_activities': [c['activity_id'] for c in constraints_by_category['Schedule-Driven']]
             })
 
     def _analyze_missing_logic(self):
