@@ -1,5 +1,76 @@
 # Changelog
 
+## [1.0.6] - 2025-11-02
+
+### Fixed - Duration Analysis Not Using "At Completion Duration(d)" Column
+
+**Issue Reported:** Duration Analysis not based on "At Completion Duration(d)" from P6 export
+
+**Root Cause:**
+P6 exports often include unit suffixes in column names:
+- "At Completion Duration(d)" - days
+- "Total Float(d)" - days
+- "Free Float(h)" - hours
+- "Percent Complete(%)" - percentage
+
+The analyzer was looking for exact column name "At Completion Duration" (without suffix), so when the CSV had "At Completion Duration(d)", it couldn't find the column and fell back to using "calculated_duration" instead.
+
+**Impact:**
+- Duration metrics showed values from calculated_duration (Finish - Start in calendar days)
+- Instead of actual "At Completion Duration" values (work days from P6)
+- Results were incorrect for schedules with non-standard calendars or constraints
+
+**Solution:**
+
+Added P6 column name normalization in parser (`src/parsers/schedule_parser.py`):
+
+```python
+# Normalize P6 column names by removing unit suffixes
+# Examples:
+#   "At Completion Duration(d)" → "At Completion Duration"
+#   "Total Float (d)" → "Total Float"
+#   "Free Float(h)" → "Free Float"
+```
+
+Removes these P6 suffixes:
+- `(d)`, `(h)`, `(%)`, `(wk)`, `(mo)`, `(yr)`
+- `(days)`, `(hours)`, `(weeks)`, `(months)`, `(years)`
+
+**Testing:**
+
+Test with CSV containing "At Completion Duration(d)":
+
+BEFORE fix:
+- Column name: 'At Completion Duration(d)' (not recognized)
+- Analyzer used: 'calculated_duration'
+- Mean: 14.5 days (from calculated values [0, 19, 14, 25])
+- Median: 16.5 days
+
+AFTER fix:
+- Column name normalized to: 'At Completion Duration' ✅
+- Analyzer used: 'At Completion Duration' ✅
+- Mean: 11.25 days (from actual P6 values [0, 15, 10, 20]) ✅
+- Median: 12.5 days ✅
+
+**User Feedback:**
+User confirmed: "Duration Analysis is not based on the 'At Completion Duration(d)'"
+
+**Parser Warnings:**
+When columns are normalized, parser now logs:
+```
+Normalized column name: 'At Completion Duration(d)' → 'At Completion Duration'
+```
+
+Users will see this in the Data Quality Warnings section after upload.
+
+**Files Modified:**
+- `src/parsers/schedule_parser.py` - Added column name normalization in `_clean_data()`
+
+**Files Added:**
+- `test_duration_column.py` - Test script verifying the fix
+
+---
+
 ## [1.0.5] - 2025-11-02
 
 ### Added - Comprehensive Constraint Tracking
