@@ -330,12 +330,20 @@ class DCMAAnalyzer:
         long_activities = []
         very_long_activities = []
 
-        duration_col = 'At Completion Duration' if 'At Completion Duration' in self.df.columns else 'calculated_duration'
+        # Use At Completion Duration (P6 work days) - REQUIRED
+        duration_col = 'At Completion Duration'
 
         if duration_col in self.df.columns:
-            for idx, row in self.df.iterrows():
+            # Filter out milestones - they have duration = 0 by nature
+            # Check Activity Type for milestone indicators
+            non_milestone_df = self.df.copy()
+            if 'Activity Type' in self.df.columns:
+                # Exclude activities where Activity Type contains "Milestone" (case insensitive)
+                non_milestone_df = self.df[~self.df['Activity Type'].str.contains('Milestone', case=False, na=False)]
+
+            for idx, row in non_milestone_df.iterrows():
                 duration = row.get(duration_col, 0)
-                if pd.notna(duration):
+                if pd.notna(duration) and duration > 0:  # Exclude zero-duration activities
                     if duration > 150:  # ~5 months
                         very_long_activities.append({
                             'activity_id': row['Activity ID'],
@@ -361,61 +369,66 @@ class DCMAAnalyzer:
                 'category': 'Schedule Granularity',
                 'severity': 'medium',
                 'title': f'Very Long Duration Activities: {len(very_long_activities)}',
-                'description': f'Found {len(very_long_activities)} activities exceeding 5 months duration.',
+                'description': f'Found {len(very_long_activities)} activities exceeding 5 months duration (excluding milestones).',
                 'count': len(very_long_activities),
                 'recommendation': 'Break down long duration activities into smaller, manageable tasks (target: 10-20 days).',
                 'affected_activities': [vla['activity_id'] for vla in very_long_activities]
             })
 
     def _analyze_average_duration(self):
-        """Calculate average activity duration"""
-        duration_col = 'At Completion Duration' if 'At Completion Duration' in self.df.columns else 'calculated_duration'
+        """Calculate average activity duration using At Completion Duration from P6"""
+        # Use At Completion Duration (P6 work days) - REQUIRED
+        duration_col = 'At Completion Duration'
 
         if duration_col in self.df.columns:
-            durations = self.df[duration_col].dropna()
+            # Filter out milestones - they have duration = 0 by nature
+            # Check Activity Type for milestone indicators
+            non_milestone_df = self.df.copy()
+            milestone_count = 0
 
-            # Filter out negative durations (data quality issue)
-            negative_count = (durations < 0).sum() if len(durations) > 0 else 0
-            if negative_count > 0:
-                self.warnings.append(f"Found {negative_count} activities with negative durations. These may indicate data quality issues (e.g., Finish date before Start date).")
+            if 'Activity Type' in self.df.columns:
+                # Identify milestones
+                is_milestone = self.df['Activity Type'].str.contains('Milestone', case=False, na=False)
+                milestone_count = is_milestone.sum()
+                # Exclude milestones from analysis
+                non_milestone_df = self.df[~is_milestone]
 
-            # Use absolute values for statistics to prevent negative averages
-            durations_abs = durations.abs()
+            # Get durations for non-milestone activities
+            durations = non_milestone_df[duration_col].dropna()
 
-            avg_duration = durations_abs.mean() if len(durations_abs) > 0 else 0
-            median_duration = durations_abs.median() if len(durations_abs) > 0 else 0
+            # Filter out zero-duration activities (shouldn't happen for non-milestones, but just in case)
+            durations = durations[durations > 0]
+
+            # Calculate statistics (no need for absolute values - P6 durations are always positive)
+            if len(durations) > 0:
+                avg_duration = durations.mean()
+                median_duration = durations.median()
+                min_duration = durations.min()
+                max_duration = durations.max()
+            else:
+                avg_duration = median_duration = min_duration = max_duration = 0
 
             self.metrics['average_duration'] = {
                 'mean': round(avg_duration, 2),
                 'median': round(median_duration, 2),
-                'min': round(durations_abs.min(), 2) if len(durations_abs) > 0 else 0,
-                'max': round(durations_abs.max(), 2) if len(durations_abs) > 0 else 0,
+                'min': round(min_duration, 2),
+                'max': round(max_duration, 2),
                 'target_range': [10, 20],
                 'status': 'pass' if 10 <= avg_duration <= 20 else 'warning',
-                'negative_duration_count': int(negative_count)
+                'total_activities_analyzed': len(durations),
+                'milestones_excluded': int(milestone_count),
+                'source_column': duration_col
             }
-
-            # Add warning if negative durations found
-            if negative_count > 0:
-                # Get the indices of activities with negative durations
-                negative_indices = durations[durations < 0].index
-                affected_activity_ids = list(self.df.loc[negative_indices, 'Activity ID'].values)
-
-                self.issues.append({
-                    'category': 'Data Quality',
-                    'severity': 'high',
-                    'title': f'Negative Durations Detected: {negative_count}',
-                    'description': f'Found {negative_count} activities with negative durations. This usually indicates Finish dates are before Start dates, which is a data quality issue.',
-                    'count': int(negative_count),
-                    'recommendation': 'Review activities with negative durations and correct the Start/Finish dates in P6.',
-                    'affected_activities': affected_activity_ids
-                })
         else:
+            # At Completion Duration column not found
             self.metrics['average_duration'] = {
                 'mean': 0,
                 'median': 0,
-                'status': 'unknown'
+                'status': 'unknown',
+                'source_column': 'none',
+                'error': 'At Completion Duration column not found in CSV. Ensure P6 export includes this column.'
             }
+            self.warnings.append("⚠️  'At Completion Duration' column not found. Duration analysis cannot be performed. Please ensure your P6 export includes the 'At Completion Duration' or 'At Completion Duration(d)' column.")
 
     def _analyze_high_float(self):
         """Analyze activities with high float"""

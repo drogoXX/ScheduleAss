@@ -255,17 +255,27 @@ with tab2:
         avg_duration_data = metrics.get('average_duration', {})
         avg_duration = avg_duration_data.get('mean', 0)
         median_duration = avg_duration_data.get('median', 0)
-        negative_count = avg_duration_data.get('negative_duration_count', 0)
+        total_analyzed = avg_duration_data.get('total_activities_analyzed', 0)
+        milestones_excluded = avg_duration_data.get('milestones_excluded', 0)
+        source_column = avg_duration_data.get('source_column', 'Unknown')
 
-        st.metric("Average Duration", f"{avg_duration:.1f} days")
+        st.metric("Average Duration", f"{avg_duration:.1f} days",
+                 help=f"Based on 'At Completion Duration' from P6")
         st.metric("Median Duration", f"{median_duration:.1f} days")
 
-        if negative_count > 0:
-            st.error(f"⚠️ {negative_count} activities have negative durations (Finish before Start)")
+        # Show analysis details
+        if total_analyzed > 0:
+            st.info(f"ℹ️ Analyzed {total_analyzed} activities (excluded {milestones_excluded} milestones)")
+
+        # Show error if column not found
+        if 'error' in avg_duration_data:
+            st.error(f"⚠️ {avg_duration_data['error']}")
 
         long_durations = metrics.get('long_durations', {})
-        st.metric("Activities >20 days", long_durations.get('count_over_20_days', 0))
-        st.metric("Activities >5 months", long_durations.get('count_over_5_months', 0))
+        st.metric("Activities >20 days", long_durations.get('count_over_20_days', 0),
+                 help="Excluding milestones")
+        st.metric("Activities >5 months", long_durations.get('count_over_5_months', 0),
+                 help="Excluding milestones")
 
     with col2:
         # Duration distribution (if data available)
