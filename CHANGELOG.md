@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.0.2] - 2025-11-02
+
+### Fixed - Multi-Session Support (CRITICAL)
+
+#### Problem
+Application crashed with `AttributeError` when users tried to login:
+```
+AttributeError: st.session_state has no attribute "users"
+```
+
+#### Root Cause
+- `DatabaseManager` was cached with `@st.cache_resource` (shared across all sessions)
+- `__init__` only ran once for the first session
+- New sessions got the cached instance but without initialized `session_state`
+- Result: New users couldn't access `st.session_state.users`
+
+#### Solution
+Added `self._init_session_state()` call at the start of every method that accesses `st.session_state`. This ensures each new session initializes its own session state before any access.
+
+#### Files Modified
+- `src/database/db_manager.py` - Added initialization checks to 17 methods
+
+#### Impact
+✅ Multi-user support now works correctly
+✅ Each session has isolated session state
+✅ No more AttributeError on login
+✅ Application works on Streamlit Cloud
+
+---
+
 ## [1.0.1] - 2025-11-02
 
 ### Fixed - Relationship Logic Processing
