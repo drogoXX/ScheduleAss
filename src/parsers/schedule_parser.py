@@ -172,9 +172,10 @@ class ScheduleParser:
             df['predecessor_list'] = df['Predecessors'].apply(
                 lambda x: self._parse_relationship_string(x, expect_full_format=False) if pd.notna(x) else []
             )
-            self.warnings.append("Using 'Predecessors' column (Activity IDs only). Recommend using 'Predecessor Details' for full relationship information.")
+            self.warnings.append("⚠️  Using 'Predecessors' column (Activity IDs only, no relationship types or lags). Relationship metrics may not be accurate. Recommend using 'Predecessor Details' column for full relationship information (format: 'ActivityID: Type Lag', e.g., 'A100: FF 10').")
         else:
             df['predecessor_list'] = [[] for _ in range(len(df))]
+            self.warnings.append("⚠️  CRITICAL: No 'Predecessor Details' or 'Predecessors' column found. Logic Quality Metrics and Relationship Types will show NO DATA. Please ensure your P6 export includes predecessor relationship information.")
 
         # Parse Successors - prioritize "Successor Details" which has full relationship notation
         if 'Successor Details' in df.columns:
@@ -186,9 +187,10 @@ class ScheduleParser:
             df['successor_list'] = df['Successors'].apply(
                 lambda x: self._parse_relationship_string(x, expect_full_format=False) if pd.notna(x) else []
             )
-            self.warnings.append("Using 'Successors' column (Activity IDs only). Recommend using 'Successor Details' for full relationship information.")
+            self.warnings.append("⚠️  Using 'Successors' column (Activity IDs only, no relationship types or lags). Recommend using 'Successor Details' column for full relationship information.")
         else:
             df['successor_list'] = [[] for _ in range(len(df))]
+            self.warnings.append("⚠️  No 'Successor Details' or 'Successors' column found. Successor data will not be available.")
 
         return df
 

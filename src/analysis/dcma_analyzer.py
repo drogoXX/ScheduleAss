@@ -26,6 +26,7 @@ class DCMAAnalyzer:
         self.df = pd.DataFrame(schedule_data['activities'])
         self.metrics = {}
         self.issues = []
+        self.warnings = []
 
     def analyze(self) -> Dict:
         """
@@ -285,17 +286,39 @@ class DCMAAnalyzer:
 
         if duration_col in self.df.columns:
             durations = self.df[duration_col].dropna()
-            avg_duration = durations.mean() if len(durations) > 0 else 0
-            median_duration = durations.median() if len(durations) > 0 else 0
+
+            # Filter out negative durations (data quality issue)
+            negative_count = (durations < 0).sum() if len(durations) > 0 else 0
+            if negative_count > 0:
+                self.warnings.append(f"Found {negative_count} activities with negative durations. These may indicate data quality issues (e.g., Finish date before Start date).")
+
+            # Use absolute values for statistics to prevent negative averages
+            durations_abs = durations.abs()
+
+            avg_duration = durations_abs.mean() if len(durations_abs) > 0 else 0
+            median_duration = durations_abs.median() if len(durations_abs) > 0 else 0
 
             self.metrics['average_duration'] = {
                 'mean': round(avg_duration, 2),
                 'median': round(median_duration, 2),
-                'min': round(durations.min(), 2) if len(durations) > 0 else 0,
-                'max': round(durations.max(), 2) if len(durations) > 0 else 0,
+                'min': round(durations_abs.min(), 2) if len(durations_abs) > 0 else 0,
+                'max': round(durations_abs.max(), 2) if len(durations_abs) > 0 else 0,
                 'target_range': [10, 20],
-                'status': 'pass' if 10 <= avg_duration <= 20 else 'warning'
+                'status': 'pass' if 10 <= avg_duration <= 20 else 'warning',
+                'negative_duration_count': int(negative_count)
             }
+
+            # Add warning if negative durations found
+            if negative_count > 0:
+                self.issues.append({
+                    'category': 'Data Quality',
+                    'severity': 'high',
+                    'title': f'Negative Durations Detected: {negative_count}',
+                    'description': f'Found {negative_count} activities with negative durations. This usually indicates Finish dates are before Start dates, which is a data quality issue.',
+                    'count': int(negative_count),
+                    'recommendation': 'Review activities with negative durations and correct the Start/Finish dates in P6.',
+                    'affected_activities': list(self.df[durations < 0]['Activity ID'].values) if negative_count > 0 else []
+                })
         else:
             self.metrics['average_duration'] = {
                 'mean': 0,

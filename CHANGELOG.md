@@ -1,5 +1,52 @@
 # Changelog
 
+## [1.0.4] - 2025-11-02
+
+### Fixed - Data Quality Issues & Enhanced Diagnostics
+
+#### Issue: "No Relationship Data Available" in Dashboard
+
+**Problem:** Logic Quality Metrics and Relationship Types Distribution showing "No relationship data available"
+
+**Root Cause:** User's CSV file missing 'Predecessor Details' or 'Predecessors' column
+
+**Solution:**
+- Enhanced parser warnings with CRITICAL alerts for missing columns
+- Improved dashboard messages explaining causes and solutions
+- Added Data Quality Warnings section in Overview tab
+- Created comprehensive TROUBLESHOOTING_GUIDE.md
+
+#### Issue: Negative Duration Values
+
+**Problem:** Duration Analysis showing negative average/median values
+
+**Root Cause:** Activities with Finish date before Start date
+
+**Solution:**
+- Automatic detection of negative durations in DCMA analyzer
+- Use absolute values for statistics
+- Create high-severity issues with affected activity IDs
+- Display warning in dashboard with count of problematic activities
+
+#### Testing & Verification
+
+Created debug scripts proving parser and analyzer work correctly:
+- `debug_data_flow.py` - End-to-end flow test ✅ ALL TESTS PASSED
+- `test_session_state_simulation.py` - Session state test ✅ DATA PRESERVED
+- Verified: 34 relationships, 7 negative lags, 6 positive lags, positive durations
+
+**Files Modified:**
+- `src/parsers/schedule_parser.py` - Enhanced warnings
+- `src/analysis/dcma_analyzer.py` - Negative duration detection
+- `pages/2_Analysis_Dashboard.py` - Better diagnostics display
+
+**Files Added:**
+- `TROUBLESHOOTING_GUIDE.md` - Comprehensive troubleshooting guide
+- `debug_data_flow.py` - Testing script
+- `test_session_state_simulation.py` - Testing script
+
+---
+
 ## [1.0.3] - 2025-11-02
 
 ### Added - Parser Verification & Documentation

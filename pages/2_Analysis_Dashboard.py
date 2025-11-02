@@ -161,6 +161,15 @@ with tab1:
 
     st.markdown("---")
 
+    # Data Quality Warnings
+    schedule_warnings = schedule['schedule_data'].get('warnings', [])
+    if schedule_warnings:
+        st.markdown("### ⚠️ Data Quality Warnings")
+        st.warning(f"Found {len(schedule_warnings)} warning(s) during schedule parsing:")
+        for warning in schedule_warnings:
+            st.markdown(f"- {warning}")
+        st.markdown("---")
+
     # Activity status distribution
     st.markdown("### Activity Status Distribution")
 
@@ -240,11 +249,16 @@ with tab2:
     col1, col2 = st.columns(2)
 
     with col1:
-        avg_duration = metrics.get('average_duration', {}).get('mean', 0)
-        median_duration = metrics.get('average_duration', {}).get('median', 0)
+        avg_duration_data = metrics.get('average_duration', {})
+        avg_duration = avg_duration_data.get('mean', 0)
+        median_duration = avg_duration_data.get('median', 0)
+        negative_count = avg_duration_data.get('negative_duration_count', 0)
 
         st.metric("Average Duration", f"{avg_duration:.1f} days")
         st.metric("Median Duration", f"{median_duration:.1f} days")
+
+        if negative_count > 0:
+            st.error(f"⚠️ {negative_count} activities have negative durations (Finish before Start)")
 
         long_durations = metrics.get('long_durations', {})
         st.metric("Activities >20 days", long_durations.get('count_over_20_days', 0))
@@ -287,7 +301,18 @@ with tab2:
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("No relationship data available")
+        st.warning("⚠️ No relationship data available")
+        st.markdown("""
+        **Possible causes:**
+        - CSV file is missing 'Predecessor Details' or 'Predecessors' column
+        - All activities have empty predecessor fields
+        - Check upload warnings for more information
+
+        **How to fix:**
+        - Re-export your schedule from P6 with relationship columns included
+        - Ensure 'Predecessor Details' column contains relationship information in format: `ActivityID: Type Lag`
+        - Example: `A100: FF 10, A200: FS, A300: SS -5`
+        """)
 
 # Tab 3: Issues
 with tab3:
