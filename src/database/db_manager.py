@@ -60,6 +60,7 @@ class DatabaseManager:
     # User Management
     def authenticate_user(self, username: str, password: str) -> Optional[Dict]:
         """Authenticate a user"""
+        self._init_session_state()  # Ensure session state is initialized
         for user in st.session_state.users:
             if user['username'] == username and user['password'] == password:
                 return user
@@ -67,6 +68,7 @@ class DatabaseManager:
 
     def get_user_by_id(self, user_id: str) -> Optional[Dict]:
         """Get user by ID"""
+        self._init_session_state()  # Ensure session state is initialized
         for user in st.session_state.users:
             if user['id'] == user_id:
                 return user
@@ -74,6 +76,7 @@ class DatabaseManager:
 
     def create_user(self, email: str, username: str, password: str, role: str = 'viewer') -> Dict:
         """Create a new user"""
+        self._init_session_state()  # Ensure session state is initialized
         user = {
             'id': f'user_{len(st.session_state.users) + 1:03d}',
             'email': email,
@@ -89,6 +92,7 @@ class DatabaseManager:
     # Project Management
     def create_project(self, project_name: str, project_code: str, description: str, created_by: str) -> Dict:
         """Create a new project"""
+        self._init_session_state()  # Ensure session state is initialized
         project = {
             'id': f'proj_{len(st.session_state.projects) + 1:03d}',
             'project_name': project_name,
@@ -104,10 +108,12 @@ class DatabaseManager:
 
     def get_all_projects(self) -> List[Dict]:
         """Get all projects"""
+        self._init_session_state()  # Ensure session state is initialized
         return st.session_state.projects
 
     def get_project_by_id(self, project_id: str) -> Optional[Dict]:
         """Get project by ID"""
+        self._init_session_state()  # Ensure session state is initialized
         for project in st.session_state.projects:
             if project['id'] == project_id:
                 return project
@@ -115,6 +121,7 @@ class DatabaseManager:
 
     def get_project_by_code(self, project_code: str) -> Optional[Dict]:
         """Get project by code"""
+        self._init_session_state()  # Ensure session state is initialized
         for project in st.session_state.projects:
             if project['project_code'] == project_code:
                 return project
@@ -124,6 +131,7 @@ class DatabaseManager:
     def create_schedule(self, project_id: str, schedule_data: Dict, file_name: str,
                        uploaded_by: str) -> Dict:
         """Create a new schedule"""
+        self._init_session_state()  # Ensure session state is initialized
         # Get version number for this project
         project_schedules = [s for s in st.session_state.schedules if s['project_id'] == project_id]
         version_number = len(project_schedules) + 1
@@ -145,6 +153,7 @@ class DatabaseManager:
 
     def get_schedule_by_id(self, schedule_id: str) -> Optional[Dict]:
         """Get schedule by ID"""
+        self._init_session_state()  # Ensure session state is initialized
         for schedule in st.session_state.schedules:
             if schedule['id'] == schedule_id:
                 return schedule
@@ -152,10 +161,12 @@ class DatabaseManager:
 
     def get_schedules_by_project(self, project_id: str) -> List[Dict]:
         """Get all schedules for a project"""
+        self._init_session_state()  # Ensure session state is initialized
         return [s for s in st.session_state.schedules if s['project_id'] == project_id]
 
     def update_schedule_status(self, schedule_id: str, status: str):
         """Update schedule analysis status"""
+        self._init_session_state()  # Ensure session state is initialized
         for schedule in st.session_state.schedules:
             if schedule['id'] == schedule_id:
                 schedule['analysis_status'] = status
@@ -163,6 +174,7 @@ class DatabaseManager:
 
     def delete_schedule(self, schedule_id: str, user_id: str):
         """Delete a schedule"""
+        self._init_session_state()  # Ensure session state is initialized
         st.session_state.schedules = [s for s in st.session_state.schedules
                                      if s['id'] != schedule_id]
         # Also delete associated analysis results
@@ -174,6 +186,7 @@ class DatabaseManager:
     def save_analysis_result(self, schedule_id: str, metrics: Dict, issues: List[Dict],
                             recommendations: List[Dict], health_score: float) -> Dict:
         """Save analysis results"""
+        self._init_session_state()  # Ensure session state is initialized
         # Check if analysis already exists for this schedule
         existing = None
         for i, result in enumerate(st.session_state.analysis_results):
@@ -203,6 +216,7 @@ class DatabaseManager:
 
     def get_analysis_by_schedule(self, schedule_id: str) -> Optional[Dict]:
         """Get analysis results for a schedule"""
+        self._init_session_state()  # Ensure session state is initialized
         for result in st.session_state.analysis_results:
             if result['schedule_id'] == schedule_id:
                 return result
@@ -210,11 +224,13 @@ class DatabaseManager:
 
     def get_all_analyses(self) -> List[Dict]:
         """Get all analysis results"""
+        self._init_session_state()  # Ensure session state is initialized
         return st.session_state.analysis_results
 
     # Audit Log
     def _log_action(self, user_id: str, action_type: str, resource_id: str, details: Dict):
         """Log user action"""
+        self._init_session_state()  # Ensure session state is initialized
         log_entry = {
             'id': f'log_{len(st.session_state.audit_log) + 1:05d}',
             'user_id': user_id,
@@ -228,6 +244,7 @@ class DatabaseManager:
     def get_audit_log(self, user_id: Optional[str] = None,
                      action_type: Optional[str] = None) -> List[Dict]:
         """Get audit log with optional filters"""
+        self._init_session_state()  # Ensure session state is initialized
         logs = st.session_state.audit_log
 
         if user_id:
