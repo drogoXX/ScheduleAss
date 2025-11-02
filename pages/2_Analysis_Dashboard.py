@@ -479,9 +479,16 @@ with tab3:
 
     float_data = metrics.get('comprehensive_float', {})
 
-    if 'error' in float_data:
-        st.error(f"⚠️ {float_data['error']}")
+    if not float_data or 'error' in float_data:
+        if 'error' in float_data:
+            st.error(f"⚠️ {float_data['error']}")
+        else:
+            st.warning("⚠️ Float analysis data not available")
+            st.info("This analysis may have been created with an older version. Please re-analyze the schedule to generate float analysis metrics.")
         st.info("Total Float column is required for float analysis. Please ensure your CSV export includes the 'Total Float(d)' column.")
+    elif 'total_activities' not in float_data:
+        st.warning("⚠️ Incomplete float analysis data")
+        st.info("Float analysis metrics are incomplete. Please re-analyze the schedule.")
     else:
         # Summary KPI Cards at the top
         st.markdown("### 📊 Key Performance Indicators")
