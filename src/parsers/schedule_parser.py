@@ -132,6 +132,32 @@ class ScheduleParser:
         # Strip whitespace from column names
         df.columns = df.columns.str.strip()
 
+        # Normalize P6 column names by removing unit suffixes
+        # P6 often adds suffixes like "(d)" for days, "(h)" for hours, "(%)" for percentages
+        # Example: "At Completion Duration(d)" → "At Completion Duration"
+        normalized_columns = {}
+        for col in df.columns:
+            # Remove common P6 suffixes while preserving the column name
+            normalized = col
+            # Remove suffixes: (d), (h), (%), (wk), (mo), (yr)
+            import re
+            normalized = re.sub(r'\s*\([dhwmy%]+\)\s*$', '', normalized, flags=re.IGNORECASE)
+            normalized = re.sub(r'\s*\(days?\)\s*$', '', normalized, flags=re.IGNORECASE)
+            normalized = re.sub(r'\s*\(hours?\)\s*$', '', normalized, flags=re.IGNORECASE)
+            normalized = re.sub(r'\s*\(weeks?\)\s*$', '', normalized, flags=re.IGNORECASE)
+            normalized = re.sub(r'\s*\(months?\)\s*$', '', normalized, flags=re.IGNORECASE)
+            normalized = re.sub(r'\s*\(years?\)\s*$', '', normalized, flags=re.IGNORECASE)
+            normalized_columns[col] = normalized.strip()
+
+        # Rename columns with normalized names
+        df = df.rename(columns=normalized_columns)
+
+        # Log if any columns were renamed
+        renamed = [(old, new) for old, new in normalized_columns.items() if old != new]
+        if renamed:
+            for old_name, new_name in renamed:
+                self.warnings.append(f"Normalized column name: '{old_name}' → '{new_name}'")
+
         # Strip whitespace from string columns
         for col in df.select_dtypes(include=['object']).columns:
             df[col] = df[col].astype(str).str.strip()
