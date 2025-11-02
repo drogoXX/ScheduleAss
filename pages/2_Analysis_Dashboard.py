@@ -152,8 +152,11 @@ with tab1:
         st.metric("Positive Lags %", f"{pos_lags_pct:.1f}%", help="Target: ≤5%")
 
     with col3:
-        constraints_pct = metrics.get('hard_constraints', {}).get('percentage', 0)
-        st.metric("Hard Constraints %", f"{constraints_pct:.1f}%", help="Target: ≤10%")
+        # Show total constrained activities
+        constraints_data = metrics.get('constraints', {})
+        total_constrained_pct = constraints_data.get('total_percentage', 0)
+        st.metric("Activities with Constraints", f"{total_constrained_pct:.1f}%",
+                 help="All constraint types (should be minimized and justified)")
 
     with col4:
         missing_logic = metrics.get('missing_logic', {}).get('count', 0)
@@ -313,6 +316,151 @@ with tab2:
         - Ensure 'Predecessor Details' column contains relationship information in format: `ActivityID: Type Lag`
         - Example: `A100: FF 10, A200: FS, A300: SS -5`
         """)
+
+    st.markdown("---")
+
+    # Constraints Analysis
+    st.markdown("### Constraints Analysis")
+
+    constraints_data = metrics.get('constraints', {})
+    if constraints_data:
+        # Summary metrics
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            total_count = constraints_data.get('total_count', 0)
+            total_pct = constraints_data.get('total_percentage', 0)
+            st.metric("Total Constrained", f"{total_count}", f"{total_pct:.1f}%")
+
+        by_category = constraints_data.get('by_category', {})
+
+        with col2:
+            hard_data = by_category.get('Hard', {})
+            hard_count = hard_data.get('count', 0)
+            hard_pct = hard_data.get('percentage', 0)
+            st.metric("Hard Constraints", f"{hard_count}", f"{hard_pct:.1f}%",
+                     help="Must/On dates - Minimize and justify")
+
+        with col3:
+            flex_data = by_category.get('Flexible', {})
+            flex_count = flex_data.get('count', 0)
+            flex_pct = flex_data.get('percentage', 0)
+            st.metric("Flexible Constraints", f"{flex_count}", f"{flex_pct:.1f}%",
+                     help="On or Before/After - Use sparingly")
+
+        with col4:
+            sched_data = by_category.get('Schedule-Driven', {})
+            sched_count = sched_data.get('count', 0)
+            sched_pct = sched_data.get('percentage', 0)
+            st.metric("Schedule-Driven", f"{sched_count}", f"{sched_pct:.1f}%",
+                     help="ALAP/ASAP - Generally acceptable")
+
+        st.markdown("---")
+
+        # Breakdown by constraint type
+        st.markdown("#### Constraint Type Breakdown")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # Pie chart showing distribution
+            if total_count > 0:
+                categories = []
+                counts = []
+                for cat_name, cat_data in by_category.items():
+                    if cat_data.get('count', 0) > 0:
+                        categories.append(cat_name)
+                        counts.append(cat_data.get('count', 0))
+
+                if categories:
+                    fig = px.pie(
+                        values=counts,
+                        names=categories,
+                        title="Constraints by Category",
+                        color_discrete_sequence=px.colors.qualitative.Set2
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            # Guidance and recommendations
+            st.markdown("**Guidance:**")
+            st.info(constraints_data.get('guidance', 'Constraints should be minimized and duly justified'))
+
+            st.markdown("**Constraint Categories:**")
+            st.markdown("""
+            - **Hard** (Must/On): Specific date required - Use only when contractually mandated
+            - **Flexible** (Or Before/After): Date boundary - Should be justified
+            - **Schedule-Driven** (ALAP/ASAP): Logic-driven - Generally acceptable but review if excessive
+            """)
+
+        # Detailed breakdown table
+        st.markdown("#### Activities with Constraints by Type")
+
+        # Create tabs for each constraint type
+        constraint_tabs = st.tabs(["Hard", "Flexible", "Schedule-Driven", "All"])
+
+        with constraint_tabs[0]:  # Hard
+            hard_activities = hard_data.get('activities', [])
+            if hard_activities:
+                st.warning(f"⚠️ {len(hard_activities)} activities have hard date constraints")
+                df_hard = pd.DataFrame(hard_activities)
+                st.dataframe(
+                    df_hard[['activity_id', 'activity_name', 'constraint_type']],
+                    use_container_width=True,
+                    height=300
+                )
+            else:
+                st.success("✅ No hard constraints - Excellent!")
+
+        with constraint_tabs[1]:  # Flexible
+            flex_activities = flex_data.get('activities', [])
+            if flex_activities:
+                st.info(f"ℹ️ {len(flex_activities)} activities have flexible date constraints")
+                df_flex = pd.DataFrame(flex_activities)
+                st.dataframe(
+                    df_flex[['activity_id', 'activity_name', 'constraint_type']],
+                    use_container_width=True,
+                    height=300
+                )
+            else:
+                st.success("✅ No flexible constraints")
+
+        with constraint_tabs[2]:  # Schedule-Driven
+            sched_activities = sched_data.get('activities', [])
+            if sched_activities:
+                st.info(f"ℹ️ {len(sched_activities)} activities have schedule-driven constraints")
+                df_sched = pd.DataFrame(sched_activities)
+                st.dataframe(
+                    df_sched[['activity_id', 'activity_name', 'constraint_type']],
+                    use_container_width=True,
+                    height=300
+                )
+            else:
+                st.info("No schedule-driven constraints")
+
+        with constraint_tabs[3]:  # All
+            all_constrained = constraints_data.get('all_activities', [])
+            if all_constrained:
+                df_all = pd.DataFrame(all_constrained)
+                st.dataframe(
+                    df_all[['activity_id', 'activity_name', 'constraint_type', 'category']],
+                    use_container_width=True,
+                    height=300
+                )
+
+                # Download option
+                csv = df_all[['activity_id', 'activity_name', 'constraint_type', 'category']].to_csv(index=False)
+                st.download_button(
+                    label="📥 Download Constrained Activities (CSV)",
+                    data=csv,
+                    file_name=f"constrained_activities_{schedule['file_name']}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            else:
+                st.success("✅ No constrained activities!")
+    else:
+        st.info("No constraint data available")
 
 # Tab 3: Issues
 with tab3:
