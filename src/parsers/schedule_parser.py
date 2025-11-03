@@ -9,6 +9,7 @@ import re
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
 import io
+from src.parsers.wbs_parser import WBSParser
 
 
 class ScheduleParser:
@@ -42,6 +43,7 @@ class ScheduleParser:
         """Initialize the parser"""
         self.errors = []
         self.warnings = []
+        self.wbs_parser = WBSParser()
 
     def parse_csv(self, file_content: bytes, file_name: str) -> Dict:
         """
@@ -81,6 +83,9 @@ class ScheduleParser:
 
             # Calculate derived fields
             df = self._calculate_derived_fields(df)
+
+            # Parse WBS structure (if WBS Code column exists)
+            df = self._parse_wbs_structure(df)
 
             # Convert to dictionary format
             schedule_data = {
@@ -374,6 +379,39 @@ class ScheduleParser:
             df['is_long_duration'] = df['calculated_duration'] > 20
         else:
             df['is_long_duration'] = False
+
+        return df
+
+    def _parse_wbs_structure(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Parse WBS Code hierarchy into separate level columns
+
+        Args:
+            df: DataFrame with WBS Code column
+
+        Returns:
+            DataFrame with added WBS level columns
+        """
+        if 'WBS Code' not in df.columns:
+            # No WBS column, add empty columns for consistency
+            df['wbs_full'] = None
+            df['wbs_depth'] = 0
+            for i in range(6):
+                df[f'wbs_level_{i}'] = None
+            self.warnings.append("WBS Code column not found - WBS analysis will not be available")
+            return df
+
+        # Use WBS parser to parse all codes
+        df = self.wbs_parser.parse_wbs_dataframe(df, 'WBS Code')
+
+        # Get validation warnings
+        wbs_warnings = self.wbs_parser.validate_wbs_structure(df)
+        for warning in wbs_warnings:
+            if warning not in self.warnings:
+                self.warnings.append(warning)
+
+        # Build WBS hierarchy for later use
+        self.wbs_parser.build_wbs_hierarchy(df)
 
         return df
 
