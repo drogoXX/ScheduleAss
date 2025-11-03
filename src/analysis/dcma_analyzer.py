@@ -402,12 +402,12 @@ class DCMAAnalyzer:
 
             # Calculate statistics (no need for absolute values - P6 durations are always positive)
             if len(durations) > 0:
-                avg_duration = durations.mean()
-                median_duration = durations.median()
-                min_duration = durations.min()
-                max_duration = durations.max()
+                avg_duration = float(durations.mean())
+                median_duration = float(durations.median())
+                min_duration = float(durations.min())
+                max_duration = float(durations.max())
             else:
-                avg_duration = median_duration = min_duration = max_duration = 0
+                avg_duration = median_duration = min_duration = max_duration = 0.0
 
             self.metrics['average_duration'] = {
                 'mean': round(avg_duration, 2),
@@ -438,8 +438,8 @@ class DCMAAnalyzer:
         if 'Total Float' in self.df.columns:
             # Calculate project duration for threshold
             if 'Start' in self.df.columns and 'Finish' in self.df.columns:
-                project_duration = (self.df['Finish'].max() - self.df['Start'].min()).days
-                float_threshold = project_duration * 0.5  # 50% of project duration
+                project_duration = int((self.df['Finish'].max() - self.df['Start'].min()).days)
+                float_threshold = float(project_duration * 0.5)  # 50% of project duration
             else:
                 float_threshold = 100  # Default threshold
 
@@ -461,12 +461,12 @@ class DCMAAnalyzer:
     def _analyze_float_ratio(self):
         """Calculate float ratio"""
         if 'Total Float' in self.df.columns:
-            avg_float = self.df['Total Float'].mean()
+            avg_float = float(self.df['Total Float'].mean())
 
             duration_col = 'At Completion Duration' if 'At Completion Duration' in self.df.columns else 'calculated_duration'
             if duration_col in self.df.columns:
-                avg_duration = self.df[duration_col].mean()
-                float_ratio = avg_float / avg_duration if avg_duration > 0 else 0
+                avg_duration = float(self.df[duration_col].mean())
+                float_ratio = float(avg_float / avg_duration) if avg_duration > 0 else 0.0
 
                 self.metrics['float_ratio'] = {
                     'ratio': round(float_ratio, 2),
@@ -476,9 +476,9 @@ class DCMAAnalyzer:
                     'status': 'pass' if 0.5 <= float_ratio <= 1.5 else 'warning'
                 }
             else:
-                self.metrics['float_ratio'] = {'ratio': 0, 'status': 'unknown'}
+                self.metrics['float_ratio'] = {'ratio': 0.0, 'status': 'unknown'}
         else:
-            self.metrics['float_ratio'] = {'ratio': 0, 'status': 'unknown'}
+            self.metrics['float_ratio'] = {'ratio': 0.0, 'status': 'unknown'}
 
     def _analyze_comprehensive_float(self):
         """
@@ -507,12 +507,12 @@ class DCMAAnalyzer:
         # Calculate project duration for context
         project_duration = 0
         if 'Start' in self.df.columns and 'Finish' in self.df.columns:
-            project_duration = (self.df['Finish'].max() - self.df['Start'].min()).days
+            project_duration = int((self.df['Finish'].max() - self.df['Start'].min()).days)
 
         # KPI 1: Critical Path (float = 0)
         critical_mask = float_series == 0
         critical_count = critical_mask.sum()
-        critical_pct = (critical_count / total_activities * 100) if total_activities > 0 else 0
+        critical_pct = float((critical_count / total_activities * 100)) if total_activities > 0 else 0.0
 
         critical_activities = []
         if critical_count > 0:
@@ -528,7 +528,7 @@ class DCMAAnalyzer:
         # KPI 2: Near-Critical (0 < float ≤ 10)
         near_critical_mask = (float_series > 0) & (float_series <= 10)
         near_critical_count = near_critical_mask.sum()
-        near_critical_pct = (near_critical_count / total_activities * 100) if total_activities > 0 else 0
+        near_critical_pct = float((near_critical_count / total_activities * 100)) if total_activities > 0 else 0.0
 
         near_critical_activities = []
         if near_critical_count > 0:
@@ -544,7 +544,7 @@ class DCMAAnalyzer:
         # KPI 3: Negative Float (behind schedule)
         negative_mask = float_series < 0
         negative_count = negative_mask.sum()
-        negative_pct = (negative_count / total_activities * 100) if total_activities > 0 else 0
+        negative_pct = float((negative_count / total_activities * 100)) if total_activities > 0 else 0.0
 
         negative_activities = []
         if negative_count > 0:
@@ -556,39 +556,39 @@ class DCMAAnalyzer:
                     'activity_id': row['Activity ID'],
                     'activity_name': row['Activity Name'],
                     'total_float': float(row['Total Float']),
-                    'wbs_code': row.get('WBS Code', 'N/A')
+                    'wbs_code': str(row.get('WBS Code', 'N/A'))
                 })
 
         # KPI 4: Float Ratio (Average Total Float / Average Remaining Duration)
-        avg_float = float_series.mean()
+        avg_float = float(float_series.mean())
 
         # For remaining duration, use At Completion Duration for not started/in progress activities
         remaining_duration = 0
         if 'At Completion Duration' in self.df.columns and 'Activity Status' in self.df.columns:
             not_complete = self.df['Activity Status'] != 'Completed'
             remaining_durations = self.df.loc[not_complete, 'At Completion Duration'].dropna()
-            avg_remaining = remaining_durations.mean() if len(remaining_durations) > 0 else 0
-            float_ratio = avg_float / avg_remaining if avg_remaining > 0 else 0
+            avg_remaining = float(remaining_durations.mean()) if len(remaining_durations) > 0 else 0.0
+            float_ratio = float(avg_float / avg_remaining) if avg_remaining > 0 else 0.0
         else:
             # Fallback to using total duration
             if 'At Completion Duration' in self.df.columns:
-                avg_duration = self.df['At Completion Duration'].mean()
-                float_ratio = avg_float / avg_duration if avg_duration > 0 else 0
+                avg_duration = float(self.df['At Completion Duration'].mean())
+                float_ratio = float(avg_float / avg_duration) if avg_duration > 0 else 0.0
                 avg_remaining = avg_duration
             else:
-                float_ratio = 0
-                avg_remaining = 0
+                float_ratio = 0.0
+                avg_remaining = 0.0
 
         # KPI 5: Statistical measures
-        median_float = float_series.median()
-        std_float = float_series.std()
+        median_float = float(float_series.median())
+        std_float = float(float_series.std())
 
         # KPI 6: Excessive Float (>50% of project duration)
         if project_duration > 0:
             excessive_threshold = project_duration * 0.5
             excessive_mask = float_series > excessive_threshold
             excessive_count = excessive_mask.sum()
-            excessive_pct = (excessive_count / total_activities * 100) if total_activities > 0 else 0
+            excessive_pct = float((excessive_count / total_activities * 100)) if total_activities > 0 else 0.0
 
             excessive_activities = []
             if excessive_count > 0:
@@ -602,8 +602,8 @@ class DCMAAnalyzer:
                     })
         else:
             excessive_count = 0
-            excessive_pct = 0
-            excessive_threshold = 0
+            excessive_pct = 0.0
+            excessive_threshold = 0.0
             excessive_activities = []
 
         # KPI 7: Most negative float (worst delay)
@@ -624,7 +624,11 @@ class DCMAAnalyzer:
             wbs_groups = self.df.groupby('WBS Code')['Total Float'].apply(list).to_dict()
             # Limit to top 10 WBS codes by activity count
             wbs_counts = self.df['WBS Code'].value_counts().head(10)
-            float_by_wbs = {wbs: wbs_groups.get(wbs, []) for wbs in wbs_counts.index}
+            # Convert numpy types to native Python types for JSON serialization
+            float_by_wbs = {
+                str(wbs): [float(f) for f in wbs_groups.get(wbs, [])]
+                for wbs in wbs_counts.index
+            }
 
         # Store comprehensive metrics
         self.metrics['comprehensive_float'] = {
@@ -671,8 +675,8 @@ class DCMAAnalyzer:
                 'mean': round(avg_float, 2),
                 'median': round(median_float, 2),
                 'std_dev': round(std_float, 2),
-                'min': round(float_series.min(), 2),
-                'max': round(float_series.max(), 2)
+                'min': round(float(float_series.min()), 2),
+                'max': round(float(float_series.max()), 2)
             },
 
             # Excessive Float (KPI 6)
