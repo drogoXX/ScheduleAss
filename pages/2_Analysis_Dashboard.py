@@ -71,10 +71,11 @@ st.session_state.current_analysis = analysis
 st.markdown("---")
 
 # Create tabs for different views
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📈 Overview",
     "🔍 Detailed Metrics",
     "⏱️ Float Analysis",
+    "🏗️ WBS Analysis",
     "⚠️ Issues",
     "💡 Recommendations",
     "📋 Activities"
@@ -936,8 +937,202 @@ with tab3:
             - Review and add missing dependencies
             """)
 
-# Tab 4: Issues
+# ============================================================================
+# Tab 4: WBS Analysis
+# ============================================================================
+
 with tab4:
+    st.markdown("## WBS (Work Breakdown Structure) Analysis")
+
+    wbs_analysis = metrics.get('wbs_analysis', {})
+
+    if not wbs_analysis.get('available'):
+        st.warning("⚠️ WBS analysis not available")
+        st.info(wbs_analysis.get('message', 'WBS Code column not found in schedule data'))
+    else:
+        # Summary cards
+        st.markdown("### 📊 WBS Overview")
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.metric("Total Activities", wbs_analysis['total_activities'])
+
+        with col2:
+            st.metric("With WBS Codes", wbs_analysis['activities_with_wbs'])
+
+        with col3:
+            avg_depth = wbs_analysis.get('avg_depth', 0)
+            st.metric("Avg WBS Depth", f"{avg_depth:.1f}")
+
+        with col4:
+            max_depth = wbs_analysis.get('max_depth', 0)
+            st.metric("Max WBS Depth", max_depth)
+
+        st.markdown("---")
+
+        # WBS Level 1 Analysis
+        level1 = wbs_analysis.get('level_1_phases', {})
+        if level1:
+            st.markdown("### 📋 WBS Level 1 (Phases) Analysis")
+
+            # Prepare data for visualization
+            phases = []
+            for wbs_code, stats in level1.items():
+                phases.append({
+                    'Phase': f"Phase {wbs_code}",
+                    'Activities': stats['activity_count'],
+                    'Percentage': stats['percentage'],
+                    'Avg Float': stats.get('avg_float', 0),
+                    'Critical': stats.get('critical_count', 0),
+                    'Negative Float': stats.get('negative_float_count', 0)
+                })
+
+            df_phases = pd.DataFrame(phases)
+
+            # Bar chart - Activities by Phase
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("#### Activities by Phase")
+                fig = px.bar(
+                    df_phases,
+                    x='Phase',
+                    y='Activities',
+                    text='Activities',
+                    color='Avg Float',
+                    color_continuous_scale='RdYlGn',
+                    title="Activity Distribution by WBS Phase"
+                )
+                fig.update_traces(textposition='outside')
+                fig.update_layout(height=400)
+                st.plotly_chart(fig, use_container_width=True)
+
+            with col2:
+                st.markdown("#### Critical Activities by Phase")
+                fig = px.bar(
+                    df_phases,
+                    x='Phase',
+                    y='Critical',
+                    text='Critical',
+                    color='Critical',
+                    color_continuous_scale='Reds',
+                    title="Critical Activities by WBS Phase"
+                )
+                fig.update_traces(textposition='outside')
+                fig.update_layout(height=400)
+                st.plotly_chart(fig, use_container_width=True)
+
+            # Detailed table
+            st.markdown("#### Detailed Phase Statistics")
+            st.dataframe(
+                df_phases,
+                use_container_width=True,
+                column_config={
+                    "Phase": st.column_config.TextColumn("Phase"),
+                    "Activities": st.column_config.NumberColumn("Activities", format="%d"),
+                    "Percentage": st.column_config.NumberColumn("% of Total", format="%.1f%%"),
+                    "Avg Float": st.column_config.NumberColumn("Avg Float (days)", format="%.1f"),
+                    "Critical": st.column_config.NumberColumn("Critical Count", format="%d"),
+                    "Negative Float": st.column_config.NumberColumn("Behind Schedule", format="%d")
+                },
+                hide_index=True
+            )
+
+        st.markdown("---")
+
+        # WBS Level 2 Analysis
+        level2 = wbs_analysis.get('level_2_areas', {})
+        if level2:
+            st.markdown("### 🗺️ WBS Level 2 (Areas) Analysis")
+
+            # Prepare data
+            areas = []
+            for wbs_code, stats in level2.items():
+                areas.append({
+                    'Area': f"Area {wbs_code}",
+                    'Activities': stats['activity_count'],
+                    'Percentage': stats['percentage'],
+                    'Avg Float': stats.get('avg_float', 0),
+                    'Critical': stats.get('critical_count', 0),
+                    '% Critical': round(stats.get('critical_count', 0) / stats['activity_count'] * 100, 1) if stats['activity_count'] > 0 else 0
+                })
+
+            df_areas = pd.DataFrame(areas)
+
+            # Heatmap-style visualization
+            st.markdown("#### Area Health Overview")
+
+            # Sort by % Critical (descending) to show problem areas first
+            df_areas_sorted = df_areas.sort_values('% Critical', ascending=False)
+
+            fig = px.bar(
+                df_areas_sorted,
+                x='Area',
+                y='Activities',
+                color='% Critical',
+                color_continuous_scale='RdYlGn_r',  # Reverse: Red=high, Green=low
+                title="WBS Areas - Colored by % Critical Activities",
+                hover_data=['Avg Float', 'Critical', '% Critical']
+            )
+            fig.update_layout(height=400)
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Detailed table
+            st.markdown("#### Detailed Area Statistics")
+            st.dataframe(
+                df_areas_sorted,
+                use_container_width=True,
+                column_config={
+                    "Area": st.column_config.TextColumn("Area"),
+                    "Activities": st.column_config.NumberColumn("Activities", format="%d"),
+                    "Percentage": st.column_config.NumberColumn("% of Total", format="%.1f%%"),
+                    "Avg Float": st.column_config.NumberColumn("Avg Float (days)", format="%.1f"),
+                    "Critical": st.column_config.NumberColumn("Critical Count", format="%d"),
+                    "% Critical": st.column_config.NumberColumn("% Critical", format="%.1f%%")
+                },
+                hide_index=True
+            )
+
+            # Identify problem areas
+            problem_areas = df_areas[df_areas['% Critical'] > 50]
+            if len(problem_areas) > 0:
+                st.warning(f"⚠️ {len(problem_areas)} area(s) have >50% critical activities")
+                st.write("**High-Risk Areas:**")
+                for _, area in problem_areas.iterrows():
+                    st.write(f"- **{area['Area']}**: {area['% Critical']:.0f}% critical ({area['Critical']}/{area['Activities']} activities)")
+
+        # Guidance
+        st.markdown("---")
+        st.markdown("### 📖 WBS Analysis Interpretation")
+
+        guidance_col1, guidance_col2 = st.columns(2)
+
+        with guidance_col1:
+            st.markdown("""
+            **What to Look For:**
+
+            - **High % Critical in Phase/Area**: Indicates schedule risk and lack of flexibility
+            - **Low Average Float**: Suggests tight schedule in that area
+            - **Uneven Distribution**: May indicate poor work breakdown or sequencing issues
+            - **Areas with Negative Float**: Require immediate attention and recovery plan
+            """)
+
+        with guidance_col2:
+            st.markdown("""
+            **Recommended Actions:**
+
+            - **Areas >50% Critical**: Add parallel paths, review dependencies
+            - **Low Float Areas**: Add schedule buffer, consider resource loading
+            - **Behind Schedule**: Prioritize recovery actions, crash activities
+            - **Balanced WBS**: Aim for 5-15% critical across all major areas
+            """)
+
+# ============================================================================
+# Tab 5: Issues
+# ============================================================================
+
+with tab5:
     st.markdown("## Identified Issues")
 
     issues = analysis['issues']
@@ -979,8 +1174,8 @@ with tab4:
             for issue in low:
                 display_issue_card(issue)
 
-# Tab 5: Recommendations
-with tab5:
+# Tab 6: Recommendations
+with tab6:
     st.markdown("## Recommendations")
 
     recommendations = analysis.get('recommendations', [])
@@ -1020,8 +1215,8 @@ with tab5:
         for i, rec in enumerate(filtered_recs, 1):
             display_recommendation_card(rec, i)
 
-# Tab 6: Activities
-with tab6:
+# Tab 7: Activities
+with tab7:
     st.markdown("## Activity Details")
 
     activities = schedule['schedule_data'].get('activities', [])
