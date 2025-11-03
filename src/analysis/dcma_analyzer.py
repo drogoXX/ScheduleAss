@@ -67,6 +67,9 @@ class DCMAAnalyzer:
         # Status Analysis
         self._analyze_activity_status()
 
+        # WBS Analysis (if WBS data available)
+        self._analyze_wbs_structure()
+
         return {
             'metrics': self.metrics,
             'issues': self.issues
@@ -862,3 +865,97 @@ class DCMAAnalyzer:
             'distribution': status_distribution,
             'total_activities': len(self.df)
         }
+
+    def _analyze_wbs_structure(self):
+        """
+        Analyze WBS (Work Breakdown Structure) distribution and metrics
+        """
+        # Check if WBS data is available
+        if 'wbs_level_0' not in self.df.columns or self.df['wbs_level_0'].isna().all():
+            self.metrics['wbs_analysis'] = {
+                'available': False,
+                'message': 'WBS data not available'
+            }
+            return
+
+        # Calculate WBS metrics
+        wbs_metrics = {
+            'available': True,
+            'total_activities': len(self.df),
+            'activities_with_wbs': int((~self.df['wbs_level_0'].isna()).sum())
+        }
+
+        # WBS Depth Analysis
+        if 'wbs_depth' in self.df.columns:
+            depth_distribution = self.df['wbs_depth'].value_counts().sort_index().to_dict()
+            wbs_metrics['depth_distribution'] = {int(k): int(v) for k, v in depth_distribution.items()}
+            wbs_metrics['avg_depth'] = float(self.df['wbs_depth'].mean())
+            wbs_metrics['max_depth'] = int(self.df['wbs_depth'].max())
+
+        # WBS Level 1 (Phase) Analysis
+        if 'wbs_level_1' in self.df.columns:
+            level1_stats = self._calculate_wbs_level_stats(1)
+            wbs_metrics['level_1_phases'] = level1_stats
+
+        # WBS Level 2 (Area) Analysis
+        if 'wbs_level_2' in self.df.columns:
+            level2_stats = self._calculate_wbs_level_stats(2)
+            wbs_metrics['level_2_areas'] = level2_stats
+
+        # Store metrics
+        self.metrics['wbs_analysis'] = wbs_metrics
+
+    def _calculate_wbs_level_stats(self, level: int) -> Dict:
+        """
+        Calculate statistics for a specific WBS level
+
+        Args:
+            level: WBS level number (1, 2, etc.)
+
+        Returns:
+            Dictionary with statistics per WBS code at that level
+        """
+        level_col = f'wbs_level_{level}'
+        
+        if level_col not in self.df.columns:
+            return {}
+
+        # Filter out NaN values
+        valid_df = self.df[~self.df[level_col].isna()].copy()
+        
+        if len(valid_df) == 0:
+            return {}
+
+        # Group by WBS level
+        stats = {}
+        
+        for wbs_code in valid_df[level_col].unique():
+            wbs_df = valid_df[valid_df[level_col] == wbs_code]
+            
+            wbs_stats = {
+                'activity_count': int(len(wbs_df)),
+                'percentage': round(float(len(wbs_df) / len(self.df) * 100), 1)
+            }
+
+            # Add float statistics if available
+            if 'Total Float' in wbs_df.columns:
+                float_series = wbs_df['Total Float'].dropna()
+                if len(float_series) > 0:
+                    wbs_stats['avg_float'] = round(float(float_series.mean()), 1)
+                    wbs_stats['critical_count'] = int((float_series == 0).sum())
+                    wbs_stats['negative_float_count'] = int((float_series < 0).sum())
+
+            # Add duration statistics if available
+            if 'At Completion Duration' in wbs_df.columns:
+                duration_series = wbs_df['At Completion Duration'].dropna()
+                if len(duration_series) > 0:
+                    wbs_stats['avg_duration'] = round(float(duration_series.mean()), 1)
+
+            # Add status distribution if available
+            if 'Activity Status' in wbs_df.columns:
+                status_dist = wbs_df['Activity Status'].value_counts().to_dict()
+                wbs_stats['status_distribution'] = status_dist
+
+            stats[str(wbs_code)] = wbs_stats
+
+        return stats
