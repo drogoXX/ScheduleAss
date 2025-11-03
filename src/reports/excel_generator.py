@@ -33,6 +33,9 @@ class ExcelGenerator:
             # Summary Sheet
             self._create_summary_sheet(writer)
 
+            # DCMA Compliance Sheet (NEW - All 14 metrics)
+            self._create_dcma_compliance_sheet(writer)
+
             # Issues Sheet
             self._create_issues_sheet(writer)
 
@@ -112,6 +115,156 @@ class ExcelGenerator:
         # Create DataFrame and write
         df_summary = pd.DataFrame(summary_data, columns=['Metric', 'Value'])
         df_summary.to_excel(writer, sheet_name='Summary', index=False)
+
+    def _create_dcma_compliance_sheet(self, writer):
+        """Create DCMA 14-Point Compliance sheet with all metrics"""
+        dcma_14 = self.analysis_results.get('dcma_14_point', {})
+
+        if not dcma_14:
+            # Fallback message if dcma_14_point not available
+            df_no_dcma = pd.DataFrame([
+                ['DCMA 14-Point Assessment Not Available'],
+                ['Please re-analyze the schedule to generate the complete DCMA assessment.']
+            ])
+            df_no_dcma.to_excel(writer, sheet_name='DCMA_Compliance', index=False, header=False)
+            return
+
+        dcma_data = []
+
+        # Header
+        dcma_data.append(['DCMA 14-POINT SCHEDULE ASSESSMENT', '', '', '', '', '', ''])
+        dcma_data.append(['Project:', self.project_name, '', '', '', '', ''])
+        dcma_data.append(['Date:', datetime.now().strftime('%Y-%m-%d'), '', '', '', '', ''])
+        dcma_data.append(['', '', '', '', '', '', ''])
+
+        # Overall Score
+        dcma_data.append(['OVERALL SCORE', '', '', '', '', '', ''])
+        dcma_data.append(['Score:', dcma_14.get('overall_score_text', 'N/A'), '', '', '', '', ''])
+        dcma_data.append(['PASS:', dcma_14.get('overall_pass_count', 0), '', '', '', '', ''])
+        dcma_data.append(['FAIL:', dcma_14.get('overall_fail_count', 0), '', '', '', '', ''])
+        dcma_data.append(['N/A:', dcma_14.get('overall_na_count', 0), '', '', '', '', ''])
+        dcma_data.append(['MANUAL:', dcma_14.get('overall_manual_count', 0), '', '', '', '', ''])
+        dcma_data.append(['', '', '', '', '', '', ''])
+
+        # Column headers for metrics
+        dcma_data.append(['Category', 'Metric #', 'Metric Name', 'Status', 'Result Value', 'Target', 'Description', 'Recommendation'])
+
+        # Iterate through categories
+        categories = dcma_14.get('categories', {})
+
+        for cat_name, cat_data in categories.items():
+            cat_number = cat_data['number']
+            cat_metrics = cat_data['metrics']
+
+            # Category separator
+            dcma_data.append(['', '', '', '', '', '', '', ''])
+            dcma_data.append([f'CATEGORY {cat_number}: {cat_name.upper()}', '', '', '', '', '', '', ''])
+
+            # Add metrics
+            for metric in cat_metrics:
+                status_symbol = ''
+                if metric['status'] == 'pass':
+                    status_symbol = 'PASS'
+                elif metric['status'] == 'fail':
+                    status_symbol = 'FAIL'
+                elif metric['status'] == 'n/a':
+                    status_symbol = 'N/A'
+                elif metric['status'] == 'manual':
+                    status_symbol = 'MANUAL'
+                else:
+                    status_symbol = 'UNKNOWN'
+
+                dcma_data.append([
+                    cat_name,
+                    metric['number'],
+                    metric['name'],
+                    status_symbol,
+                    metric['result'],
+                    metric['target'],
+                    metric['description'],
+                    metric.get('recommendation', '')
+                ])
+
+        # Legend
+        dcma_data.append(['', '', '', '', '', '', '', ''])
+        dcma_data.append(['', '', '', '', '', '', '', ''])
+        dcma_data.append(['STATUS LEGEND', '', '', '', '', '', '', ''])
+        dcma_data.append(['PASS', 'Meets DCMA standard', '', '', '', '', '', ''])
+        dcma_data.append(['FAIL', 'Does not meet DCMA standard (action required)', '', '', '', '', '', ''])
+        dcma_data.append(['N/A', 'Not applicable or data not available', '', '', '', '', '', ''])
+        dcma_data.append(['MANUAL', 'Manual verification required', '', '', '', '', '', ''])
+        dcma_data.append(['', '', '', '', '', '', '', ''])
+
+        # DCMA Thresholds Reference
+        dcma_data.append(['DCMA STANDARD THRESHOLDS', '', '', '', '', '', '', ''])
+        dcma_data.append(['Metric', 'Target', 'Rationale', '', '', '', '', ''])
+        dcma_data.append(['Negative Lags', '0', 'Leads indicate unrealistic schedule compression', '', '', '', '', ''])
+        dcma_data.append(['Positive Lags', '≤5%', 'Excessive lags may hide work or indicate missing activities', '', '', '', '', ''])
+        dcma_data.append(['Hard Constraints', '≤10%', 'Over-constrained schedules lack flexibility', '', '', '', '', ''])
+        dcma_data.append(['High Float (>44d)', '<5%', 'May indicate missing logic or orphaned activities', '', '', '', '', ''])
+        dcma_data.append(['Negative Float', '0%', 'Indicates schedule is behind baseline', '', '', '', '', ''])
+        dcma_data.append(['Missing Predecessors', '≤1', 'Only start milestone should lack predecessor', '', '', '', '', ''])
+        dcma_data.append(['Missing Successors', '≤1', 'Only finish milestone should lack successor', '', '', '', '', ''])
+        dcma_data.append(['Long Duration (>44d)', '<5%', 'Activities should be decomposed for better tracking', '', '', '', '', ''])
+        dcma_data.append(['Invalid Dates', '0', 'Dates must be realistic and within project timeframe', '', '', '', '', ''])
+        dcma_data.append(['Missing Resources', '≤5%', 'Resource loading is essential for realistic schedule', '', '', '', '', ''])
+        dcma_data.append(['SS/FF Relationships', '≤10%', 'FS relationships are preferred for clarity', '', '', '', '', ''])
+        dcma_data.append(['CPLI', '≥0.95', 'Measures schedule compression risk', '', '', '', '', ''])
+        dcma_data.append(['BEI', '≥0.95', 'Measures execution against baseline', '', '', '', '', ''])
+        dcma_data.append(['Critical Path Test', 'Manual', 'Verify schedule uses true CPM logic', '', '', '', '', ''])
+
+        # Create DataFrame and write
+        df_dcma = pd.DataFrame(dcma_data)
+        df_dcma.to_excel(writer, sheet_name='DCMA_Compliance', index=False, header=False)
+
+        # Apply formatting (conditional formatting for PASS/FAIL)
+        try:
+            from openpyxl.styles import PatternFill, Font
+            from openpyxl.utils import get_column_letter
+
+            workbook = writer.book
+            worksheet = workbook['DCMA_Compliance']
+
+            # Define fills
+            pass_fill = PatternFill(start_color='90EE90', end_color='90EE90', fill_type='solid')  # Light green
+            fail_fill = PatternFill(start_color='FFB6C1', end_color='FFB6C1', fill_type='solid')  # Light red
+            na_fill = PatternFill(start_color='FFFFE0', end_color='FFFFE0', fill_type='solid')  # Light yellow
+            manual_fill = PatternFill(start_color='E0E0E0', end_color='E0E0E0', fill_type='solid')  # Light gray
+            header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')  # Blue
+            header_font = Font(color='FFFFFF', bold=True)
+
+            # Apply conditional formatting to Status column (column D)
+            for row in worksheet.iter_rows(min_row=14, max_row=worksheet.max_row):
+                status_cell = row[3]  # Column D (0-indexed, so index 3)
+                if status_cell.value:
+                    if status_cell.value == 'PASS':
+                        status_cell.fill = pass_fill
+                    elif status_cell.value == 'FAIL':
+                        status_cell.fill = fail_fill
+                    elif status_cell.value == 'N/A':
+                        status_cell.fill = na_fill
+                    elif status_cell.value == 'MANUAL':
+                        status_cell.fill = manual_fill
+
+            # Format header row (row 13)
+            for cell in worksheet[13]:
+                cell.fill = header_fill
+                cell.font = header_font
+
+            # Auto-adjust column widths
+            for col in range(1, 9):
+                column_letter = get_column_letter(col)
+                max_length = 0
+                for row in worksheet.iter_rows(min_col=col, max_col=col):
+                    for cell in row:
+                        if cell.value:
+                            max_length = max(max_length, len(str(cell.value)))
+                adjusted_width = min(max_length + 2, 50)  # Cap at 50
+                worksheet.column_dimensions[column_letter].width = adjusted_width
+
+        except Exception as e:
+            # Formatting is optional, continue if it fails
+            pass
 
     def _create_issues_sheet(self, writer):
         """Create issues detail sheet"""

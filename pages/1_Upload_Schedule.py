@@ -190,6 +190,11 @@ if analyze_button:
             metrics_calc = MetricsCalculator(schedule_data, dcma_results['metrics'])
             performance_metrics = metrics_calc.calculate_all_metrics()
 
+            # Generate DCMA 14-Point Summary
+            cpli_value = performance_metrics.get('cpli', {}).get('value', 0)
+            bei_value = performance_metrics.get('bei', {}).get('value', 0)
+            dcma_14_summary = analyzer.get_dcma_14_point_summary(cpli_value, bei_value)
+
             progress_bar.progress(85)
 
             # Step 5: Generate recommendations
@@ -215,13 +220,15 @@ if analyze_button:
                 health_score=performance_metrics['health_score']['score']
             )
 
-            # Add performance metrics to analysis
+            # Add performance metrics and DCMA 14-point summary to analysis
             analysis['performance_metrics'] = performance_metrics
             analysis['dcma_metrics'] = dcma_results['metrics']
+            analysis['dcma_14_point'] = dcma_14_summary
 
             # Store in session state
             st.session_state.current_schedule = schedule
             st.session_state.current_analysis = analysis
+            st.session_state.dcma_14_point = dcma_14_summary
 
             progress_bar.progress(100)
             status_text.text("✅ Analysis complete!")
