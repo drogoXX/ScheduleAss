@@ -983,7 +983,7 @@ with tab4:
             hierarchy_data = []
 
             # Get activities for building full hierarchy
-            activities = schedule_data.get('activities', [])
+            activities = schedule['schedule_data'].get('activities', [])
             if activities:
                 df_activities = pd.DataFrame(activities)
 
