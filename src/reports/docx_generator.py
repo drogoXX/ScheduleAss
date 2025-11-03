@@ -37,6 +37,7 @@ class DOCXGenerator:
         self._add_cover_page()
         self._add_executive_summary()
         self._add_dcma_compliance()
+        self._add_missing_logic_breakdown()
         self._add_key_metrics()
         self._add_wbs_analysis()
         self._add_issues_summary()
@@ -256,6 +257,99 @@ The schedule contains {stats['total_activities']} activities with an overall hea
             row_cells[0].text = metric_name
             row_cells[1].text = status.upper()
             row_cells[2].text = result
+
+        self.document.add_paragraph()
+
+    def _add_missing_logic_breakdown(self):
+        """Add detailed missing logic breakdown section"""
+        self.document.add_heading('Logic Completeness Analysis', level=1)
+
+        dcma_metrics = self.analysis_results.get('dcma_metrics', {})
+        missing_logic_info = dcma_metrics.get('missing_logic', {})
+
+        # Check if there's any missing logic
+        total_missing = missing_logic_info.get('count', 0)
+
+        if total_missing == 0:
+            self.document.add_paragraph('✓ All activities have complete logic relationships (predecessors and successors).')
+            self.document.add_paragraph()
+            return
+
+        # Add overview paragraph
+        overview = self.document.add_paragraph()
+        overview.add_run(f'Found {total_missing} activities with missing logic relationships. ').bold = True
+        overview.add_run('Activities without proper predecessors or successors indicate incomplete schedule logic and can affect critical path calculations.')
+
+        self.document.add_paragraph()
+
+        # Create breakdown table
+        self.document.add_heading('Missing Logic Breakdown', level=2)
+
+        table = self.document.add_table(rows=1, cols=3)
+        table.style = 'Light Grid Accent 1'
+
+        # Header row
+        hdr_cells = table.rows[0].cells
+        hdr_cells[0].text = 'Category'
+        hdr_cells[1].text = 'Count'
+        hdr_cells[2].text = 'Description'
+
+        # Total
+        row_cells = table.add_row().cells
+        row_cells[0].text = 'Total Missing Logic'
+        row_cells[1].text = str(total_missing)
+        row_cells[2].text = 'Unique activities with missing predecessor and/or successor'
+
+        # Missing predecessor only
+        pred_only = missing_logic_info.get('missing_predecessor_only_count', 0)
+        row_cells = table.add_row().cells
+        row_cells[0].text = '  ├─ Missing Predecessor Only'
+        row_cells[1].text = str(pred_only)
+        row_cells[2].text = 'Activities that need predecessors added'
+
+        # Missing successor only
+        succ_only = missing_logic_info.get('missing_successor_only_count', 0)
+        row_cells = table.add_row().cells
+        row_cells[0].text = '  ├─ Missing Successor Only'
+        row_cells[1].text = str(succ_only)
+        row_cells[2].text = 'Activities that need successors added'
+
+        # Missing both
+        both_count = missing_logic_info.get('missing_both_count', 0)
+        row_cells = table.add_row().cells
+        row_cells[0].text = '  └─ Missing Both'
+        row_cells[1].text = str(both_count)
+        row_cells[2].text = 'Activities that need both predecessors and successors'
+
+        self.document.add_paragraph()
+
+        # DCMA validation section
+        self.document.add_heading('DCMA Validation', level=2)
+
+        dcma_pred = dcma_metrics.get('dcma_missing_predecessors', {}).get('count', 0)
+        dcma_succ = dcma_metrics.get('dcma_missing_successors', {}).get('count', 0)
+
+        validation_para = self.document.add_paragraph()
+        validation_para.add_run('DCMA Missing Predecessors: ').bold = True
+        validation_para.add_run(f'{dcma_pred} activities ')
+        validation_para.add_run(f'(includes {pred_only} pred-only + {both_count} both)\n')
+
+        validation_para.add_run('DCMA Missing Successors: ').bold = True
+        validation_para.add_run(f'{dcma_succ} activities ')
+        validation_para.add_run(f'(includes {succ_only} succ-only + {both_count} both)\n\n')
+
+        validation_para.add_run('Note: ').bold = True
+        validation_para.add_run('Activities missing both predecessors and successors are counted in each DCMA category. ')
+        validation_para.add_run(f'Breakdown validation: {pred_only} + {succ_only} + {both_count} = {total_missing} total.')
+
+        self.document.add_paragraph()
+
+        # Add recommendation if there are issues
+        if total_missing > 0:
+            self.document.add_heading('Recommendation', level=2)
+            rec_para = self.document.add_paragraph()
+            rec_para.add_run('⚠ Action Required: ').bold = True
+            rec_para.add_run('Add logical relationships to all activities. Every activity (except start/finish milestones) should have both predecessors and successors to ensure proper schedule logic and accurate critical path calculations.')
 
         self.document.add_paragraph()
 
