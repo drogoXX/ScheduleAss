@@ -162,9 +162,44 @@ with tab1:
 
     with col4:
         missing_logic = metrics.get('missing_logic', {}).get('count', 0)
-        st.metric("Missing Logic", missing_logic, help="Target: 0")
+        st.metric("Missing Logic", missing_logic, help="Target: 0 - Total unique activities with missing logic")
 
     st.markdown("---")
+
+    # Missing Logic Breakdown
+    if missing_logic > 0:
+        st.markdown("### Missing Logic Breakdown")
+        missing_logic_data = metrics.get('missing_logic', {})
+
+        col_ml1, col_ml2, col_ml3, col_ml4 = st.columns(4)
+
+        with col_ml1:
+            total_count = missing_logic_data.get('count', 0)
+            st.metric("Total Missing Logic", total_count,
+                     help="Total unique activities with missing predecessor and/or successor")
+
+        with col_ml2:
+            pred_only = missing_logic_data.get('missing_predecessor_only_count', 0)
+            st.metric("Missing Predecessor Only", pred_only,
+                     help="Activities missing only predecessors")
+
+        with col_ml3:
+            succ_only = missing_logic_data.get('missing_successor_only_count', 0)
+            st.metric("Missing Successor Only", succ_only,
+                     help="Activities missing only successors")
+
+        with col_ml4:
+            both_count = missing_logic_data.get('missing_both_count', 0)
+            st.metric("Missing Both", both_count,
+                     help="Activities missing both predecessors and successors")
+
+        # Add validation note
+        dcma_missing_pred = metrics.get('dcma_missing_predecessors', {}).get('count', 0)
+        dcma_missing_succ = metrics.get('dcma_missing_successors', {}).get('count', 0)
+
+        st.caption(f"📊 **DCMA Counts:** Missing Predecessors: {dcma_missing_pred} | Missing Successors: {dcma_missing_succ} | Note: Activities missing both are counted in each category.")
+
+        st.markdown("---")
 
     # Data Quality Warnings
     schedule_warnings = schedule['schedule_data'].get('warnings', [])
