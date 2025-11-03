@@ -971,6 +971,137 @@ with tab4:
 
         st.markdown("---")
 
+        # Advanced WBS Hierarchy Visualizations
+        st.markdown("### 🎨 WBS Hierarchy Visualization")
+
+        # Prepare hierarchical data for treemap and sunburst
+        level1 = wbs_analysis.get('level_1_phases', {})
+        level2 = wbs_analysis.get('level_2_areas', {})
+
+        if level1 or level2:
+            # Build hierarchical dataframe
+            hierarchy_data = []
+
+            # Get activities for building full hierarchy
+            activities = schedule_data.get('activities', [])
+            if activities:
+                df_activities = pd.DataFrame(activities)
+
+                # Check if we have WBS level columns
+                if 'wbs_level_0' in df_activities.columns and 'wbs_level_1' in df_activities.columns:
+                    # Build hierarchy from activities
+                    for _, row in df_activities.iterrows():
+                        if pd.notna(row.get('wbs_level_0')):
+                            level0_name = str(row['wbs_level_0'])
+                            level1_name = str(row.get('wbs_level_1', '')) if pd.notna(row.get('wbs_level_1')) else None
+                            level2_name = str(row.get('wbs_level_2', '')) if pd.notna(row.get('wbs_level_2')) else None
+
+                            # Get health score for this path
+                            health_score = 50  # Default
+                            health_color = '#f39c12'  # Default orange
+
+                            # Try to get health score from level1 stats
+                            if level1_name and level1_name in level1:
+                                level1_stats = level1[level1_name]
+                                if 'health_score' in level1_stats:
+                                    health_score = level1_stats['health_score'].get('score', 50)
+                                    health_color = level1_stats['health_score'].get('color', '#f39c12')
+
+                            # Try to get health score from level2 stats (more specific)
+                            if level2_name and level2_name in level2:
+                                level2_stats = level2[level2_name]
+                                if 'health_score' in level2_stats:
+                                    health_score = level2_stats['health_score'].get('score', 50)
+                                    health_color = level2_stats['health_score'].get('color', '#f39c12')
+
+                            hierarchy_data.append({
+                                'Level_0': level0_name,
+                                'Level_1': level1_name if level1_name else 'Unknown',
+                                'Level_2': level2_name if level2_name else 'Unknown',
+                                'Activity_ID': row.get('Activity ID', ''),
+                                'Health_Score': health_score,
+                                'Health_Color': health_color,
+                                'Count': 1
+                            })
+
+                if hierarchy_data:
+                    df_hierarchy = pd.DataFrame(hierarchy_data)
+
+                    # Aggregate for visualizations
+                    # Group by Level 0, Level 1, Level 2 and sum counts
+                    df_agg = df_hierarchy.groupby(['Level_0', 'Level_1', 'Level_2']).agg({
+                        'Count': 'sum',
+                        'Health_Score': 'mean'
+                    }).reset_index()
+
+                    viz_col1, viz_col2 = st.columns(2)
+
+                    with viz_col1:
+                        st.markdown("#### 🔲 Treemap View")
+                        st.caption("Size = activity count, Color = health score")
+
+                        # Create treemap
+                        fig_treemap = px.treemap(
+                            df_agg,
+                            path=['Level_0', 'Level_1', 'Level_2'],
+                            values='Count',
+                            color='Health_Score',
+                            color_continuous_scale='RdYlGn',
+                            color_continuous_midpoint=50,
+                            range_color=[0, 100],
+                            title="WBS Hierarchy - Treemap",
+                            hover_data={'Health_Score': ':.1f', 'Count': True}
+                        )
+                        fig_treemap.update_layout(
+                            height=500,
+                            margin=dict(t=50, l=0, r=0, b=0)
+                        )
+                        fig_treemap.update_traces(
+                            textposition='middle center',
+                            textfont_size=11
+                        )
+                        st.plotly_chart(fig_treemap, use_container_width=True)
+
+                    with viz_col2:
+                        st.markdown("#### ☀️ Sunburst Chart")
+                        st.caption("Hierarchical view from project → phase → area")
+
+                        # Create sunburst
+                        fig_sunburst = px.sunburst(
+                            df_agg,
+                            path=['Level_0', 'Level_1', 'Level_2'],
+                            values='Count',
+                            color='Health_Score',
+                            color_continuous_scale='RdYlGn',
+                            color_continuous_midpoint=50,
+                            range_color=[0, 100],
+                            title="WBS Hierarchy - Sunburst",
+                            hover_data={'Health_Score': ':.1f', 'Count': True}
+                        )
+                        fig_sunburst.update_layout(
+                            height=500,
+                            margin=dict(t=50, l=0, r=0, b=0)
+                        )
+                        st.plotly_chart(fig_sunburst, use_container_width=True)
+
+                    # Legend for health scores
+                    st.markdown("**Health Score Legend:**")
+                    legend_cols = st.columns(5)
+                    with legend_cols[0]:
+                        st.markdown("🟢 **Excellent** (80-100)")
+                    with legend_cols[1]:
+                        st.markdown("🟢 **Good** (65-79)")
+                    with legend_cols[2]:
+                        st.markdown("🟡 **Fair** (50-64)")
+                    with legend_cols[3]:
+                        st.markdown("🟠 **Poor** (35-49)")
+                    with legend_cols[4]:
+                        st.markdown("🔴 **Critical** (0-34)")
+                else:
+                    st.info("Unable to build hierarchy visualization. Activities may not have complete WBS data.")
+
+        st.markdown("---")
+
         # WBS Level 1 Analysis
         level1 = wbs_analysis.get('level_1_phases', {})
         if level1:
@@ -979,16 +1110,47 @@ with tab4:
             # Prepare data for visualization
             phases = []
             for wbs_code, stats in level1.items():
+                health_data = stats.get('health_score', {})
                 phases.append({
                     'Phase': f"Phase {wbs_code}",
                     'Activities': stats['activity_count'],
                     'Percentage': stats['percentage'],
                     'Avg Float': stats.get('avg_float', 0),
                     'Critical': stats.get('critical_count', 0),
-                    'Negative Float': stats.get('negative_float_count', 0)
+                    'Negative Float': stats.get('negative_float_count', 0),
+                    'Health Score': health_data.get('score', 0),
+                    'Rating': health_data.get('rating', 'Unknown')
                 })
 
             df_phases = pd.DataFrame(phases)
+
+            # Display health score cards for each phase
+            st.markdown("#### Phase Health Scores")
+            health_cols = st.columns(min(len(phases), 5))  # Max 5 columns
+            for idx, phase_data in enumerate(phases[:5]):  # Show top 5
+                with health_cols[idx]:
+                    score = phase_data['Health Score']
+                    rating = phase_data['Rating']
+                    # Determine color based on score
+                    if score >= 80:
+                        color = "🟢"
+                    elif score >= 65:
+                        color = "🟢"
+                    elif score >= 50:
+                        color = "🟡"
+                    elif score >= 35:
+                        color = "🟠"
+                    else:
+                        color = "🔴"
+                    st.metric(
+                        phase_data['Phase'],
+                        f"{score:.0f}/100",
+                        delta=rating,
+                        delta_color="off"
+                    )
+                    st.caption(f"{color} {rating}")
+
+            st.markdown("---")
 
             # Bar chart - Activities by Phase
             col1, col2 = st.columns(2)
@@ -1034,7 +1196,9 @@ with tab4:
                     "Percentage": st.column_config.NumberColumn("% of Total", format="%.1f%%"),
                     "Avg Float": st.column_config.NumberColumn("Avg Float (days)", format="%.1f"),
                     "Critical": st.column_config.NumberColumn("Critical Count", format="%d"),
-                    "Negative Float": st.column_config.NumberColumn("Behind Schedule", format="%d")
+                    "Negative Float": st.column_config.NumberColumn("Behind Schedule", format="%d"),
+                    "Health Score": st.column_config.NumberColumn("Health Score", format="%.0f"),
+                    "Rating": st.column_config.TextColumn("Rating")
                 },
                 hide_index=True
             )
@@ -1049,16 +1213,49 @@ with tab4:
             # Prepare data
             areas = []
             for wbs_code, stats in level2.items():
+                health_data = stats.get('health_score', {})
                 areas.append({
                     'Area': f"Area {wbs_code}",
                     'Activities': stats['activity_count'],
                     'Percentage': stats['percentage'],
                     'Avg Float': stats.get('avg_float', 0),
                     'Critical': stats.get('critical_count', 0),
-                    '% Critical': round(stats.get('critical_count', 0) / stats['activity_count'] * 100, 1) if stats['activity_count'] > 0 else 0
+                    '% Critical': round(stats.get('critical_count', 0) / stats['activity_count'] * 100, 1) if stats['activity_count'] > 0 else 0,
+                    'Health Score': health_data.get('score', 0),
+                    'Rating': health_data.get('rating', 'Unknown')
                 })
 
             df_areas = pd.DataFrame(areas)
+
+            # Display health score cards for each area
+            st.markdown("#### Area Health Scores")
+            # Sort by health score to show critical areas first
+            areas_sorted_by_health = sorted(areas, key=lambda x: x['Health Score'])
+            health_cols = st.columns(min(len(areas), 5))  # Max 5 columns
+            for idx, area_data in enumerate(areas_sorted_by_health[:5]):  # Show worst 5
+                with health_cols[idx]:
+                    score = area_data['Health Score']
+                    rating = area_data['Rating']
+                    # Determine color based on score
+                    if score >= 80:
+                        color = "🟢"
+                    elif score >= 65:
+                        color = "🟢"
+                    elif score >= 50:
+                        color = "🟡"
+                    elif score >= 35:
+                        color = "🟠"
+                    else:
+                        color = "🔴"
+                    st.metric(
+                        area_data['Area'],
+                        f"{score:.0f}/100",
+                        delta=rating,
+                        delta_color="off"
+                    )
+                    st.caption(f"{color} {rating}")
+
+            st.markdown("---")
 
             # Heatmap-style visualization
             st.markdown("#### Area Health Overview")
@@ -1089,7 +1286,9 @@ with tab4:
                     "Percentage": st.column_config.NumberColumn("% of Total", format="%.1f%%"),
                     "Avg Float": st.column_config.NumberColumn("Avg Float (days)", format="%.1f"),
                     "Critical": st.column_config.NumberColumn("Critical Count", format="%d"),
-                    "% Critical": st.column_config.NumberColumn("% Critical", format="%.1f%%")
+                    "% Critical": st.column_config.NumberColumn("% Critical", format="%.1f%%"),
+                    "Health Score": st.column_config.NumberColumn("Health Score", format="%.0f"),
+                    "Rating": st.column_config.TextColumn("Rating")
                 },
                 hide_index=True
             )
