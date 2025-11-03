@@ -480,852 +480,920 @@ with tab2:
 
 def calculate_float_distribution(activities):
     """Calculate float distribution for histogram and donut chart"""
-    if not activities:
+    try:
+        if not activities:
+            return {}
+
+        df = pd.DataFrame(activities)
+        if 'Total Float' not in df.columns:
+            return {}
+
+        float_series = df['Total Float'].dropna()
+
+        if len(float_series) == 0:
+            return {}
+
+        distribution = {
+            'negative': int((float_series < 0).sum()),
+            'critical': int((float_series == 0).sum()),
+            'near_critical': int(((float_series > 0) & (float_series <= 10)).sum()),
+            'low_risk': int(((float_series > 10) & (float_series <= 30)).sum()),
+            'comfortable': int((float_series > 30).sum())
+        }
+
+        return distribution
+    except Exception as e:
+        # Return empty dict on any error to prevent tab crash
         return {}
-
-    df = pd.DataFrame(activities)
-    if 'Total Float' not in df.columns:
-        return {}
-
-    float_series = df['Total Float'].dropna()
-
-    distribution = {
-        'negative': int((float_series < 0).sum()),
-        'critical': int((float_series == 0).sum()),
-        'near_critical': int(((float_series > 0) & (float_series <= 10)).sum()),
-        'low_risk': int(((float_series > 10) & (float_series <= 30)).sum()),
-        'comfortable': int((float_series > 30).sum())
-    }
-
-    return distribution
 
 def calculate_float_by_wbs(activities):
     """Calculate float by WBS code for box plot"""
-    if not activities:
+    try:
+        if not activities:
+            return {}
+
+        df = pd.DataFrame(activities)
+
+        # Check if required columns exist
+        if 'Total Float' not in df.columns:
+            return {}
+
+        if 'WBS Code' not in df.columns:
+            return {}
+
+        # Filter out rows with NaN in WBS Code or Total Float
+        valid_df = df.dropna(subset=['WBS Code', 'Total Float'])
+
+        if len(valid_df) == 0:
+            return {}
+
+        # Group by WBS and get float values (excluding NaN)
+        wbs_groups = valid_df.groupby('WBS Code')['Total Float'].apply(list).to_dict()
+
+        # Get top 10 WBS codes by activity count
+        wbs_counts = valid_df['WBS Code'].value_counts().head(10)
+
+        if len(wbs_counts) == 0:
+            return {}
+
+        # Return float values for top 10 WBS codes
+        float_by_wbs = {
+            str(wbs): [float(f) for f in wbs_groups.get(wbs, [])]
+            for wbs in wbs_counts.index
+        }
+
+        return float_by_wbs
+    except Exception as e:
+        # Return empty dict on any error to prevent tab crash
         return {}
-
-    df = pd.DataFrame(activities)
-
-    # Check if required columns exist
-    if 'Total Float' not in df.columns:
-        return {}
-
-    if 'WBS Code' not in df.columns:
-        return {}
-
-    # Filter out rows with NaN in WBS Code or Total Float
-    valid_df = df.dropna(subset=['WBS Code', 'Total Float'])
-
-    if len(valid_df) == 0:
-        return {}
-
-    # Group by WBS and get float values (excluding NaN)
-    wbs_groups = valid_df.groupby('WBS Code')['Total Float'].apply(list).to_dict()
-
-    # Get top 10 WBS codes by activity count
-    wbs_counts = valid_df['WBS Code'].value_counts().head(10)
-
-    if len(wbs_counts) == 0:
-        return {}
-
-    # Return float values for top 10 WBS codes
-    float_by_wbs = {
-        str(wbs): [float(f) for f in wbs_groups.get(wbs, [])]
-        for wbs in wbs_counts.index
-    }
-
-    return float_by_wbs
 
 def get_negative_float_activities(activities):
     """Get list of activities with negative float (sorted by most negative)"""
-    if not activities:
+    try:
+        if not activities:
+            return []
+
+        df = pd.DataFrame(activities)
+        if 'Total Float' not in df.columns:
+            return []
+
+        # Filter negative float
+        negative_df = df[df['Total Float'] < 0].copy()
+
+        if len(negative_df) == 0:
+            return []
+
+        # Sort by most negative first
+        negative_df = negative_df.sort_values('Total Float')
+
+        # Return top 20
+        result = []
+        for _, row in negative_df.head(20).iterrows():
+            result.append({
+                'activity_id': row.get('Activity ID', 'N/A'),
+                'activity_name': row.get('Activity Name', 'N/A'),
+                'total_float': float(row['Total Float']),
+                'status': row.get('Activity Status', 'N/A')
+            })
+
+        return result
+    except Exception as e:
+        # Return empty list on any error to prevent tab crash
         return []
-
-    df = pd.DataFrame(activities)
-    if 'Total Float' not in df.columns:
-        return []
-
-    # Filter negative float
-    negative_df = df[df['Total Float'] < 0].copy()
-
-    # Sort by most negative first
-    negative_df = negative_df.sort_values('Total Float')
-
-    # Return top 20
-    result = []
-    for _, row in negative_df.head(20).iterrows():
-        result.append({
-            'activity_id': row.get('Activity ID', 'N/A'),
-            'activity_name': row.get('Activity Name', 'N/A'),
-            'total_float': float(row['Total Float']),
-            'status': row.get('Activity Status', 'N/A')
-        })
-
-    return result
 
 # ============================================================================
 # Tab 3: Float Analysis
 # ============================================================================
 
 with tab3:
-    st.markdown("## Comprehensive Total Float Analysis")
+    try:
+        st.markdown("## Comprehensive Total Float Analysis")
 
-    float_data = metrics.get('comprehensive_float', {})
+        # Defensive data validation
+        if 'schedule_data' not in schedule or schedule['schedule_data'] is None:
+            st.warning("⚠️ Schedule data not available")
+            st.info("Please upload a schedule first to view Float Analysis.")
+            st.stop()
 
-    # Calculate chart data on-demand from activities (not stored in metrics)
-    activities = schedule['schedule_data'].get('activities', [])
-    distribution = calculate_float_distribution(activities)
-    float_by_wbs = calculate_float_by_wbs(activities)
-    negative_activities = get_negative_float_activities(activities)
+        float_data = metrics.get('comprehensive_float', {})
 
-    if not float_data or 'error' in float_data:
-        if 'error' in float_data:
-            st.error(f"⚠️ {float_data['error']}")
+        # Calculate chart data on-demand from activities (not stored in metrics)
+        activities = schedule['schedule_data'].get('activities', [])
+
+        # Validate activities data
+        if not activities or not isinstance(activities, list):
+            st.warning("⚠️ No activity data available for Float Analysis")
+            st.info("The schedule data may be incomplete. Please re-upload the schedule.")
+            st.stop()
+
+        # Safely calculate chart data with error handling
+        try:
+            distribution = calculate_float_distribution(activities)
+        except Exception as e:
+            st.error(f"Error calculating float distribution: {str(e)}")
+            distribution = {}
+
+        try:
+            float_by_wbs = calculate_float_by_wbs(activities)
+        except Exception as e:
+            st.error(f"Error calculating float by WBS: {str(e)}")
+            float_by_wbs = {}
+
+        try:
+            negative_activities = get_negative_float_activities(activities)
+        except Exception as e:
+            st.error(f"Error getting negative float activities: {str(e)}")
+            negative_activities = []
+
+        if not float_data or 'error' in float_data:
+            if 'error' in float_data:
+                st.error(f"⚠️ {float_data['error']}")
+            else:
+                st.warning("⚠️ Float analysis data not available")
+                st.info("This analysis may have been created with an older version. Please re-analyze the schedule to generate float analysis metrics.")
+            st.info("Total Float column is required for float analysis. Please ensure your CSV export includes the 'Total Float(d)' column.")
+        elif 'total_activities' not in float_data:
+            st.warning("⚠️ Incomplete float analysis data")
+            st.info("Float analysis metrics are incomplete. Please re-analyze the schedule.")
         else:
-            st.warning("⚠️ Float analysis data not available")
-            st.info("This analysis may have been created with an older version. Please re-analyze the schedule to generate float analysis metrics.")
-        st.info("Total Float column is required for float analysis. Please ensure your CSV export includes the 'Total Float(d)' column.")
-    elif 'total_activities' not in float_data:
-        st.warning("⚠️ Incomplete float analysis data")
-        st.info("Float analysis metrics are incomplete. Please re-analyze the schedule.")
-    else:
-        # Summary KPI Cards at the top
-        st.markdown("### 📊 Key Performance Indicators")
+            # Summary KPI Cards at the top
+            st.markdown("### 📊 Key Performance Indicators")
 
-        col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3, col4 = st.columns(4)
 
-        # KPI 1: Critical Path
-        critical_data = float_data.get('critical', {})
-        critical_count = critical_data.get('count', 0)
-        critical_pct = critical_data.get('percentage', 0)
-        critical_status = critical_data.get('status', 'unknown')
+            # KPI 1: Critical Path
+            critical_data = float_data.get('critical', {})
+            critical_count = critical_data.get('count', 0)
+            critical_pct = critical_data.get('percentage', 0)
+            critical_status = critical_data.get('status', 'unknown')
 
-        with col1:
-            if critical_status == 'good':
-                status_icon = "✓"
-                status_color = "green"
-            elif critical_status == 'warning':
-                status_icon = "⚠"
-                status_color = "orange"
-            else:
-                status_icon = "✗"
-                status_color = "red"
-
-            st.markdown(f"""
-            <div style="padding: 10px; border-left: 4px solid {status_color}; background-color: #f0f2f6; border-radius: 5px;">
-                <h4 style="margin: 0; color: {status_color};">{status_icon} Critical Path</h4>
-                <h2 style="margin: 5px 0;">{critical_count}</h2>
-                <p style="margin: 0; font-size: 14px;">{critical_pct:.1f}% of activities</p>
-                <p style="margin: 0; font-size: 12px; color: gray;">Target: 5-15%</p>
-            </div>
-            """, unsafe_allow_html=True)
-
-        # KPI 2: Near-Critical
-        near_critical_data = float_data.get('near_critical', {})
-        near_critical_count = near_critical_data.get('count', 0)
-        near_critical_pct = near_critical_data.get('percentage', 0)
-
-        with col2:
-            st.markdown(f"""
-            <div style="padding: 10px; border-left: 4px solid orange; background-color: #f0f2f6; border-radius: 5px;">
-                <h4 style="margin: 0; color: orange;">⚠ Near-Critical</h4>
-                <h2 style="margin: 5px 0;">{near_critical_count}</h2>
-                <p style="margin: 0; font-size: 14px;">{near_critical_pct:.1f}% of activities</p>
-                <p style="margin: 0; font-size: 12px; color: gray;">Float: 1-10 days</p>
-            </div>
-            """, unsafe_allow_html=True)
-
-        # KPI 3: Negative Float
-        negative_data = float_data.get('negative_float', {})
-        negative_count = negative_data.get('count', 0)
-        negative_pct = negative_data.get('percentage', 0)
-        negative_status = negative_data.get('status', 'unknown')
-
-        with col3:
-            if negative_status == 'good':
-                status_icon = "✓"
-                status_color = "green"
-            else:
-                status_icon = "✗"
-                status_color = "red"
-
-            st.markdown(f"""
-            <div style="padding: 10px; border-left: 4px solid {status_color}; background-color: #f0f2f6; border-radius: 5px;">
-                <h4 style="margin: 0; color: {status_color};">{status_icon} Behind Schedule</h4>
-                <h2 style="margin: 5px 0;">{negative_count}</h2>
-                <p style="margin: 0; font-size: 14px;">{negative_pct:.1f}% of activities</p>
-                <p style="margin: 0; font-size: 12px; color: gray;">Target: 0</p>
-            </div>
-            """, unsafe_allow_html=True)
-
-        # KPI 4: Float Ratio
-        ratio_data = float_data.get('float_ratio', {})
-        ratio_value = ratio_data.get('ratio', 0)
-        ratio_status = ratio_data.get('status', 'unknown')
-
-        with col4:
-            if ratio_status == 'good':
-                status_icon = "✓"
-                status_color = "green"
-            elif ratio_status == 'warning':
-                status_icon = "⚠"
-                status_color = "orange"
-            else:
-                status_icon = "✗"
-                status_color = "red"
-
-            st.markdown(f"""
-            <div style="padding: 10px; border-left: 4px solid {status_color}; background-color: #f0f2f6; border-radius: 5px;">
-                <h4 style="margin: 0; color: {status_color};">{status_icon} Float Ratio</h4>
-                <h2 style="margin: 5px 0;">{ratio_value:.2f}</h2>
-                <p style="margin: 0; font-size: 14px;">Avg Float / Avg Duration</p>
-                <p style="margin: 0; font-size: 12px; color: gray;">Target: 0.5-1.5</p>
-            </div>
-            """, unsafe_allow_html=True)
-
-        st.markdown("---")
-
-        # Row 2: Charts
-        col1, col2 = st.columns(2)
-
-        with col1:
-            # Chart 1: Float Distribution Histogram
-            st.markdown("#### Float Distribution Histogram")
-
-            # distribution is calculated at top of tab from activities
-            if distribution:
-                # Prepare data for histogram
-                categories = ['Negative\n(<0)', 'Critical\n(0)', 'Near-Critical\n(1-10)', 'Low Risk\n(11-30)', 'Comfortable\n(>30)']
-                counts = [
-                    distribution.get('negative', 0),
-                    distribution.get('critical', 0),
-                    distribution.get('near_critical', 0),
-                    distribution.get('low_risk', 0),
-                    distribution.get('comfortable', 0)
-                ]
-                colors = ['#e74c3c', '#f39c12', '#f1c40f', '#2ecc71', '#27ae60']
-
-                fig = go.Figure(data=[
-                    go.Bar(
-                        x=categories,
-                        y=counts,
-                        marker_color=colors,
-                        text=counts,
-                        textposition='auto',
-                        hovertemplate='<b>%{x}</b><br>Count: %{y}<extra></extra>'
-                    )
-                ])
-
-                fig.update_layout(
-                    xaxis_title="Float Range (days)",
-                    yaxis_title="Number of Activities",
-                    showlegend=False,
-                    height=400
-                )
-
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("No distribution data available")
-
-        with col2:
-            # Chart 2: Critical Path Analysis Donut Chart
-            st.markdown("#### Critical Path Analysis")
-
-            if distribution:
-                labels = ['Critical (0)', 'Near-Critical (1-10)', 'Low Risk (11-30)', 'Comfortable (>30)']
-                values = [
-                    distribution.get('critical', 0),
-                    distribution.get('near_critical', 0),
-                    distribution.get('low_risk', 0),
-                    distribution.get('comfortable', 0)
-                ]
-                colors_donut = ['#e74c3c', '#f39c12', '#3498db', '#2ecc71']
-
-                fig = go.Figure(data=[
-                    go.Pie(
-                        labels=labels,
-                        values=values,
-                        hole=0.4,
-                        marker=dict(colors=colors_donut),
-                        textinfo='label+percent',
-                        hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>'
-                    )
-                ])
-
-                fig.update_layout(
-                    showlegend=True,
-                    height=400,
-                    legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05)
-                )
-
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("No distribution data available")
-
-        st.markdown("---")
-
-        # Row 3: Additional Metrics and Box Plot
-        col1, col2 = st.columns([1, 2])
-
-        with col1:
-            # Additional Statistics
-            st.markdown("#### Statistical Summary")
-
-            stats = float_data.get('statistics', {})
-            mean_float = stats.get('mean', 0)
-            median_float = stats.get('median', 0)
-            std_float = stats.get('std_dev', 0)
-
-            st.metric("Mean Float", f"{mean_float:.1f} days")
-            st.metric("Median Float", f"{median_float:.1f} days")
-            st.metric("Std Deviation", f"{std_float:.1f} days")
-
-            # Most negative float
-            most_negative = float_data.get('most_negative', 0)
-            if most_negative < 0:
-                st.metric("Worst Delay", f"{most_negative:.1f} days",
-                         delta=None,
-                         help="Most negative float value")
-
-            # Excessive float
-            excessive_data = float_data.get('excessive_float', {})
-            excessive_count = excessive_data.get('count', 0)
-            if excessive_count > 0:
-                excessive_pct = excessive_data.get('percentage', 0)
-                st.metric("Excessive Float", f"{excessive_count}",
-                         delta=f"{excessive_pct:.1f}%",
-                         help="Activities with float >50% of project duration")
-
-        with col2:
-            # Chart 3: Float Box Plot by WBS Code
-            st.markdown("#### Float Distribution by WBS Code")
-
-            # float_by_wbs is calculated at top of tab from activities
-            if float_by_wbs and len(float_by_wbs) > 0:
-                # Prepare data for box plot
-                wbs_codes = list(float_by_wbs.keys())
-                float_values = list(float_by_wbs.values())
-
-                fig = go.Figure()
-
-                for wbs, floats in zip(wbs_codes, float_values):
-                    if floats:  # Only add if there are float values
-                        fig.add_trace(go.Box(
-                            y=floats,
-                            name=str(wbs),
-                            boxmean='sd',  # Show mean and standard deviation
-                            hovertemplate='<b>WBS: %{fullData.name}</b><br>Float: %{y:.1f} days<extra></extra>'
-                        ))
-
-                fig.update_layout(
-                    xaxis_title="WBS Code",
-                    yaxis_title="Total Float (days)",
-                    showlegend=False,
-                    height=400,
-                    xaxis={'categoryorder': 'total descending'}
-                )
-
-                # Add horizontal lines for thresholds
-                fig.add_hline(y=0, line_dash="dash", line_color="red",
-                             annotation_text="Critical", annotation_position="right")
-                fig.add_hline(y=10, line_dash="dash", line_color="orange",
-                             annotation_text="Near-Critical", annotation_position="right")
-
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                # Debug information - why no data?
-                test_df = pd.DataFrame(activities)
-                if 'WBS Code' not in test_df.columns:
-                    st.warning("⚠️ WBS Code column not found in schedule data")
-                    st.info("Your P6 export may not include the WBS Code column. This is optional but recommended for detailed analysis.")
-                elif test_df['WBS Code'].isna().all():
-                    st.warning("⚠️ All WBS Code values are empty")
-                    st.info("Activities don't have WBS codes assigned. Please ensure WBS structure is defined in P6.")
-                elif 'Total Float' not in test_df.columns:
-                    st.warning("⚠️ Total Float column not found")
+            with col1:
+                if critical_status == 'good':
+                    status_icon = "✓"
+                    status_color = "green"
+                elif critical_status == 'warning':
+                    status_icon = "⚠"
+                    status_color = "orange"
                 else:
-                    valid_wbs = test_df['WBS Code'].dropna()
-                    valid_float = test_df['Total Float'].dropna()
-                    st.info(f"ℹ️ Found {len(valid_wbs)} activities with WBS codes and {len(valid_float)} with Total Float values, but unable to create chart")
+                    status_icon = "✗"
+                    status_color = "red"
 
-                    # Additional debug: show sample of WBS codes
-                    if len(valid_wbs) > 0:
-                        st.write("Sample WBS Codes:", list(valid_wbs.head(5).values))
+                st.markdown(f"""
+                <div style="padding: 10px; border-left: 4px solid {status_color}; background-color: #f0f2f6; border-radius: 5px;">
+                    <h4 style="margin: 0; color: {status_color};">{status_icon} Critical Path</h4>
+                    <h2 style="margin: 5px 0;">{critical_count}</h2>
+                    <p style="margin: 0; font-size: 14px;">{critical_pct:.1f}% of activities</p>
+                    <p style="margin: 0; font-size: 12px; color: gray;">Target: 5-15%</p>
+                </div>
+                """, unsafe_allow_html=True)
 
-                    # Check if both columns have valid data in the same rows
-                    both_valid = test_df.dropna(subset=['WBS Code', 'Total Float'])
-                    st.write(f"Activities with both WBS Code and Total Float: {len(both_valid)}")
-                    if len(both_valid) == 0:
-                        st.warning("No activities have both WBS Code AND Total Float values. Box plot requires both.")
+            # KPI 2: Near-Critical
+            near_critical_data = float_data.get('near_critical', {})
+            near_critical_count = near_critical_data.get('count', 0)
+            near_critical_pct = near_critical_data.get('percentage', 0)
 
-        st.markdown("---")
+            with col2:
+                st.markdown(f"""
+                <div style="padding: 10px; border-left: 4px solid orange; background-color: #f0f2f6; border-radius: 5px;">
+                    <h4 style="margin: 0; color: orange;">⚠ Near-Critical</h4>
+                    <h2 style="margin: 5px 0;">{near_critical_count}</h2>
+                    <p style="margin: 0; font-size: 14px;">{near_critical_pct:.1f}% of activities</p>
+                    <p style="margin: 0; font-size: 12px; color: gray;">Float: 1-10 days</p>
+                </div>
+                """, unsafe_allow_html=True)
 
-        # Row 4: Negative Float Activities Table
-        if negative_count > 0:
-            st.markdown("#### 🔴 Activities with Negative Float (Behind Schedule)")
+            # KPI 3: Negative Float
+            negative_data = float_data.get('negative_float', {})
+            negative_count = negative_data.get('count', 0)
+            negative_pct = negative_data.get('percentage', 0)
+            negative_status = negative_data.get('status', 'unknown')
 
-            # negative_activities is calculated at top of tab from activities
-            if negative_activities:
-                # Limit to top 20
-                top_20 = negative_activities[:20]
+            with col3:
+                if negative_status == 'good':
+                    status_icon = "✓"
+                    status_color = "green"
+                else:
+                    status_icon = "✗"
+                    status_color = "red"
 
-                df_negative = pd.DataFrame(top_20)
+                st.markdown(f"""
+                <div style="padding: 10px; border-left: 4px solid {status_color}; background-color: #f0f2f6; border-radius: 5px;">
+                    <h4 style="margin: 0; color: {status_color};">{status_icon} Behind Schedule</h4>
+                    <h2 style="margin: 5px 0;">{negative_count}</h2>
+                    <p style="margin: 0; font-size: 14px;">{negative_pct:.1f}% of activities</p>
+                    <p style="margin: 0; font-size: 12px; color: gray;">Target: 0</p>
+                </div>
+                """, unsafe_allow_html=True)
 
-                # Display as sortable table
-                st.dataframe(
-                    df_negative,
-                    use_container_width=True,
-                    height=400,
-                    column_config={
-                        "activity_id": st.column_config.TextColumn("Activity ID"),
-                        "activity_name": st.column_config.TextColumn("Activity Name", width="large"),
-                        "total_float": st.column_config.NumberColumn("Total Float (days)", format="%.1f"),
-                        "status": st.column_config.TextColumn("Status")
-                    }
-                )
+            # KPI 4: Float Ratio
+            ratio_data = float_data.get('float_ratio', {})
+            ratio_value = ratio_data.get('ratio', 0)
+            ratio_status = ratio_data.get('status', 'unknown')
 
-                if len(negative_activities) > 20:
-                    st.info(f"ℹ️ Showing top 20 of {len(negative_activities)} activities with negative float. Download full list below.")
+            with col4:
+                if ratio_status == 'good':
+                    status_icon = "✓"
+                    status_color = "green"
+                elif ratio_status == 'warning':
+                    status_icon = "⚠"
+                    status_color = "orange"
+                else:
+                    status_icon = "✗"
+                    status_color = "red"
 
-                # Download option
-                csv = df_negative.to_csv(index=False)
-                st.download_button(
-                    label="📥 Download Negative Float Activities (CSV)",
-                    data=csv,
-                    file_name=f"negative_float_activities_{schedule['file_name']}.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-        else:
-            st.success("✅ No activities with negative float - schedule is on track!")
+                st.markdown(f"""
+                <div style="padding: 10px; border-left: 4px solid {status_color}; background-color: #f0f2f6; border-radius: 5px;">
+                    <h4 style="margin: 0; color: {status_color};">{status_icon} Float Ratio</h4>
+                    <h2 style="margin: 5px 0;">{ratio_value:.2f}</h2>
+                    <p style="margin: 0; font-size: 14px;">Avg Float / Avg Duration</p>
+                    <p style="margin: 0; font-size: 12px; color: gray;">Target: 0.5-1.5</p>
+                </div>
+                """, unsafe_allow_html=True)
 
-        # Guidance Section
-        st.markdown("---")
-        st.markdown("#### 📖 Interpretation Guidance")
+            st.markdown("---")
 
-        guidance_col1, guidance_col2 = st.columns(2)
+            # Row 2: Charts
+            col1, col2 = st.columns(2)
 
-        with guidance_col1:
-            st.markdown("""
-            **Float Analysis Thresholds (DCMA Best Practices):**
+            with col1:
+                # Chart 1: Float Distribution Histogram
+                st.markdown("#### Float Distribution Histogram")
 
-            - **Critical Path (0 days):** 5-15% of activities is normal
-                - <5%: May indicate missing logic or over-optimization
-                - >15%: Concerning - schedule may be too tightly constrained
+                # distribution is calculated at top of tab from activities
+                if distribution:
+                    # Prepare data for histogram
+                    categories = ['Negative\n(<0)', 'Critical\n(0)', 'Near-Critical\n(1-10)', 'Low Risk\n(11-30)', 'Comfortable\n(>30)']
+                    counts = [
+                        distribution.get('negative', 0),
+                        distribution.get('critical', 0),
+                        distribution.get('near_critical', 0),
+                        distribution.get('low_risk', 0),
+                        distribution.get('comfortable', 0)
+                    ]
+                    colors = ['#e74c3c', '#f39c12', '#f1c40f', '#2ecc71', '#27ae60']
 
-            - **Near-Critical (1-10 days):** Watch closely
-                - These activities can easily become critical
-                - Require active monitoring and mitigation planning
+                    fig = go.Figure(data=[
+                        go.Bar(
+                            x=categories,
+                            y=counts,
+                            marker_color=colors,
+                            text=counts,
+                            textposition='auto',
+                            hovertemplate='<b>%{x}</b><br>Count: %{y}<extra></extra>'
+                        )
+                    ])
 
-            - **Negative Float:** Always investigate immediately
-                - Indicates activities are behind schedule
-                - Requires corrective action and recovery plan
-            """)
+                    fig.update_layout(
+                        xaxis_title="Float Range (days)",
+                        yaxis_title="Number of Activities",
+                        showlegend=False,
+                        height=400
+                    )
 
-        with guidance_col2:
-            st.markdown("""
-            **Float Ratio (Avg Float / Avg Remaining Duration):**
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No distribution data available")
 
-            - **0.5 - 1.5:** Good - Healthy schedule flexibility
-            - **< 0.5:** Poor - Schedule may be too tight
-            - **> 1.5:** Poor - May indicate missing logic or unrealistic durations
+            with col2:
+                # Chart 2: Critical Path Analysis Donut Chart
+                st.markdown("#### Critical Path Analysis")
 
-            **Excessive Float (>50% project duration):**
+                if distribution:
+                    labels = ['Critical (0)', 'Near-Critical (1-10)', 'Low Risk (11-30)', 'Comfortable (>30)']
+                    values = [
+                        distribution.get('critical', 0),
+                        distribution.get('near_critical', 0),
+                        distribution.get('low_risk', 0),
+                        distribution.get('comfortable', 0)
+                    ]
+                    colors_donut = ['#e74c3c', '#f39c12', '#3498db', '#2ecc71']
 
-            - May indicate missing predecessor/successor relationships
-            - Could suggest activities not properly integrated into schedule logic
-            - Review and add missing dependencies
-            """)
+                    fig = go.Figure(data=[
+                        go.Pie(
+                            labels=labels,
+                            values=values,
+                            hole=0.4,
+                            marker=dict(colors=colors_donut),
+                            textinfo='label+percent',
+                            hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>'
+                        )
+                    ])
+
+                    fig.update_layout(
+                        showlegend=True,
+                        height=400,
+                        legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05)
+                    )
+
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No distribution data available")
+
+            st.markdown("---")
+
+            # Row 3: Additional Metrics and Box Plot
+            col1, col2 = st.columns([1, 2])
+
+            with col1:
+                # Additional Statistics
+                st.markdown("#### Statistical Summary")
+
+                stats = float_data.get('statistics', {})
+                mean_float = stats.get('mean', 0)
+                median_float = stats.get('median', 0)
+                std_float = stats.get('std_dev', 0)
+
+                st.metric("Mean Float", f"{mean_float:.1f} days")
+                st.metric("Median Float", f"{median_float:.1f} days")
+                st.metric("Std Deviation", f"{std_float:.1f} days")
+
+                # Most negative float
+                most_negative = float_data.get('most_negative', 0)
+                if most_negative < 0:
+                    st.metric("Worst Delay", f"{most_negative:.1f} days",
+                             delta=None,
+                             help="Most negative float value")
+
+                # Excessive float
+                excessive_data = float_data.get('excessive_float', {})
+                excessive_count = excessive_data.get('count', 0)
+                if excessive_count > 0:
+                    excessive_pct = excessive_data.get('percentage', 0)
+                    st.metric("Excessive Float", f"{excessive_count}",
+                             delta=f"{excessive_pct:.1f}%",
+                             help="Activities with float >50% of project duration")
+
+            with col2:
+                # Chart 3: Float Box Plot by WBS Code
+                st.markdown("#### Float Distribution by WBS Code")
+
+                # float_by_wbs is calculated at top of tab from activities
+                if float_by_wbs and len(float_by_wbs) > 0:
+                    # Prepare data for box plot
+                    wbs_codes = list(float_by_wbs.keys())
+                    float_values = list(float_by_wbs.values())
+
+                    fig = go.Figure()
+
+                    for wbs, floats in zip(wbs_codes, float_values):
+                        if floats:  # Only add if there are float values
+                            fig.add_trace(go.Box(
+                                y=floats,
+                                name=str(wbs),
+                                boxmean='sd',  # Show mean and standard deviation
+                                hovertemplate='<b>WBS: %{fullData.name}</b><br>Float: %{y:.1f} days<extra></extra>'
+                            ))
+
+                    fig.update_layout(
+                        xaxis_title="WBS Code",
+                        yaxis_title="Total Float (days)",
+                        showlegend=False,
+                        height=400,
+                        xaxis={'categoryorder': 'total descending'}
+                    )
+
+                    # Add horizontal lines for thresholds
+                    fig.add_hline(y=0, line_dash="dash", line_color="red",
+                                 annotation_text="Critical", annotation_position="right")
+                    fig.add_hline(y=10, line_dash="dash", line_color="orange",
+                                 annotation_text="Near-Critical", annotation_position="right")
+
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    # Debug information - why no data?
+                    test_df = pd.DataFrame(activities)
+                    if 'WBS Code' not in test_df.columns:
+                        st.warning("⚠️ WBS Code column not found in schedule data")
+                        st.info("Your P6 export may not include the WBS Code column. This is optional but recommended for detailed analysis.")
+                    elif test_df['WBS Code'].isna().all():
+                        st.warning("⚠️ All WBS Code values are empty")
+                        st.info("Activities don't have WBS codes assigned. Please ensure WBS structure is defined in P6.")
+                    elif 'Total Float' not in test_df.columns:
+                        st.warning("⚠️ Total Float column not found")
+                    else:
+                        valid_wbs = test_df['WBS Code'].dropna()
+                        valid_float = test_df['Total Float'].dropna()
+                        st.info(f"ℹ️ Found {len(valid_wbs)} activities with WBS codes and {len(valid_float)} with Total Float values, but unable to create chart")
+
+                        # Additional debug: show sample of WBS codes
+                        if len(valid_wbs) > 0:
+                            st.write("Sample WBS Codes:", list(valid_wbs.head(5).values))
+
+                        # Check if both columns have valid data in the same rows
+                        both_valid = test_df.dropna(subset=['WBS Code', 'Total Float'])
+                        st.write(f"Activities with both WBS Code and Total Float: {len(both_valid)}")
+                        if len(both_valid) == 0:
+                            st.warning("No activities have both WBS Code AND Total Float values. Box plot requires both.")
+
+            st.markdown("---")
+
+            # Row 4: Negative Float Activities Table
+            if negative_count > 0:
+                st.markdown("#### 🔴 Activities with Negative Float (Behind Schedule)")
+
+                # negative_activities is calculated at top of tab from activities
+                if negative_activities:
+                    # Limit to top 20
+                    top_20 = negative_activities[:20]
+
+                    df_negative = pd.DataFrame(top_20)
+
+                    # Display as sortable table
+                    st.dataframe(
+                        df_negative,
+                        use_container_width=True,
+                        height=400,
+                        column_config={
+                            "activity_id": st.column_config.TextColumn("Activity ID"),
+                            "activity_name": st.column_config.TextColumn("Activity Name", width="large"),
+                            "total_float": st.column_config.NumberColumn("Total Float (days)", format="%.1f"),
+                            "status": st.column_config.TextColumn("Status")
+                        }
+                    )
+
+                    if len(negative_activities) > 20:
+                        st.info(f"ℹ️ Showing top 20 of {len(negative_activities)} activities with negative float. Download full list below.")
+
+                    # Download option
+                    csv = df_negative.to_csv(index=False)
+                    st.download_button(
+                        label="📥 Download Negative Float Activities (CSV)",
+                        data=csv,
+                        file_name=f"negative_float_activities_{schedule['file_name']}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+            else:
+                st.success("✅ No activities with negative float - schedule is on track!")
+
+            # Guidance Section
+            st.markdown("---")
+            st.markdown("#### 📖 Interpretation Guidance")
+
+            guidance_col1, guidance_col2 = st.columns(2)
+
+            with guidance_col1:
+                st.markdown("""
+                **Float Analysis Thresholds (DCMA Best Practices):**
+
+                - **Critical Path (0 days):** 5-15% of activities is normal
+                    - <5%: May indicate missing logic or over-optimization
+                    - >15%: Concerning - schedule may be too tightly constrained
+
+                - **Near-Critical (1-10 days):** Watch closely
+                    - These activities can easily become critical
+                    - Require active monitoring and mitigation planning
+
+                - **Negative Float:** Always investigate immediately
+                    - Indicates activities are behind schedule
+                    - Requires corrective action and recovery plan
+                """)
+
+            with guidance_col2:
+                st.markdown("""
+                **Float Ratio (Avg Float / Avg Remaining Duration):**
+
+                - **0.5 - 1.5:** Good - Healthy schedule flexibility
+                - **< 0.5:** Poor - Schedule may be too tight
+                - **> 1.5:** Poor - May indicate missing logic or unrealistic durations
+
+                **Excessive Float (>50% project duration):**
+
+                - May indicate missing predecessor/successor relationships
+                - Could suggest activities not properly integrated into schedule logic
+                - Review and add missing dependencies
+                """)
+
+    except Exception as e:
+        st.error("⚠️ An error occurred in Float Analysis")
+        st.error(f"Error details: {str(e)}")
+        st.info("Please try refreshing the page or re-uploading the schedule. If the problem persists, contact support.")
+
+        # Show detailed traceback in an expander for debugging
+        import traceback
+        with st.expander("🔧 Technical Details (for debugging)"):
+            st.code(traceback.format_exc())
 
 # ============================================================================
 # Tab 4: WBS Analysis
 # ============================================================================
 
 with tab4:
-    st.markdown("## WBS (Work Breakdown Structure) Analysis")
+    try:
+        st.markdown("## WBS (Work Breakdown Structure) Analysis")
 
-    wbs_analysis = metrics.get('wbs_analysis', {})
+        wbs_analysis = metrics.get('wbs_analysis', {})
 
-    if not wbs_analysis.get('available'):
-        st.warning("⚠️ WBS analysis not available")
-        st.info(wbs_analysis.get('message', 'WBS Code column not found in schedule data'))
-    else:
-        # Summary cards
-        st.markdown("### 📊 WBS Overview")
+        if not wbs_analysis.get('available'):
+            st.warning("⚠️ WBS analysis not available")
+            st.info(wbs_analysis.get('message', 'WBS Code column not found in schedule data'))
+        else:
+            # Summary cards
+            st.markdown("### 📊 WBS Overview")
 
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-            st.metric("Total Activities", wbs_analysis['total_activities'])
-
-        with col2:
-            st.metric("With WBS Codes", wbs_analysis['activities_with_wbs'])
-
-        with col3:
-            avg_depth = wbs_analysis.get('avg_depth', 0)
-            st.metric("Avg WBS Depth", f"{avg_depth:.1f}")
-
-        with col4:
-            max_depth = wbs_analysis.get('max_depth', 0)
-            st.metric("Max WBS Depth", max_depth)
-
-        st.markdown("---")
-
-        # Advanced WBS Hierarchy Visualizations
-        st.markdown("### 🎨 WBS Hierarchy Visualization")
-
-        # Prepare hierarchical data for treemap and sunburst
-        level1 = wbs_analysis.get('level_1_phases', {})
-        level2 = wbs_analysis.get('level_2_areas', {})
-
-        if level1 or level2:
-            # Build hierarchical dataframe
-            hierarchy_data = []
-
-            # Get activities for building full hierarchy
-            activities = schedule['schedule_data'].get('activities', [])
-            if activities:
-                df_activities = pd.DataFrame(activities)
-
-                # Check if we have WBS level columns
-                if 'wbs_level_0' in df_activities.columns and 'wbs_level_1' in df_activities.columns:
-                    # Build hierarchy from activities
-                    for _, row in df_activities.iterrows():
-                        if pd.notna(row.get('wbs_level_0')):
-                            level0_name = str(row['wbs_level_0'])
-                            level1_name = str(row.get('wbs_level_1', '')) if pd.notna(row.get('wbs_level_1')) else None
-                            level2_name = str(row.get('wbs_level_2', '')) if pd.notna(row.get('wbs_level_2')) else None
-
-                            # Get health score for this path
-                            health_score = 50  # Default
-                            health_color = '#f39c12'  # Default orange
-
-                            # Try to get health score from level1 stats
-                            if level1_name and level1_name in level1:
-                                level1_stats = level1[level1_name]
-                                if 'health_score' in level1_stats:
-                                    health_score = level1_stats['health_score'].get('score', 50)
-                                    health_color = level1_stats['health_score'].get('color', '#f39c12')
-
-                            # Try to get health score from level2 stats (more specific)
-                            if level2_name and level2_name in level2:
-                                level2_stats = level2[level2_name]
-                                if 'health_score' in level2_stats:
-                                    health_score = level2_stats['health_score'].get('score', 50)
-                                    health_color = level2_stats['health_score'].get('color', '#f39c12')
-
-                            hierarchy_data.append({
-                                'Level_0': level0_name,
-                                'Level_1': level1_name if level1_name else 'Unknown',
-                                'Level_2': level2_name if level2_name else 'Unknown',
-                                'Activity_ID': row.get('Activity ID', ''),
-                                'Health_Score': health_score,
-                                'Health_Color': health_color,
-                                'Count': 1
-                            })
-
-                if hierarchy_data:
-                    df_hierarchy = pd.DataFrame(hierarchy_data)
-
-                    # Aggregate for visualizations
-                    # Group by Level 0, Level 1, Level 2 and sum counts
-                    df_agg = df_hierarchy.groupby(['Level_0', 'Level_1', 'Level_2']).agg({
-                        'Count': 'sum',
-                        'Health_Score': 'mean'
-                    }).reset_index()
-
-                    viz_col1, viz_col2 = st.columns(2)
-
-                    with viz_col1:
-                        st.markdown("#### 🔲 Treemap View")
-                        st.caption("Size = activity count, Color = health score")
-
-                        # Create treemap
-                        fig_treemap = px.treemap(
-                            df_agg,
-                            path=['Level_0', 'Level_1', 'Level_2'],
-                            values='Count',
-                            color='Health_Score',
-                            color_continuous_scale='RdYlGn',
-                            color_continuous_midpoint=50,
-                            range_color=[0, 100],
-                            title="WBS Hierarchy - Treemap",
-                            hover_data={'Health_Score': ':.1f', 'Count': True}
-                        )
-                        fig_treemap.update_layout(
-                            height=500,
-                            margin=dict(t=50, l=0, r=0, b=0)
-                        )
-                        fig_treemap.update_traces(
-                            textposition='middle center',
-                            textfont_size=11
-                        )
-                        st.plotly_chart(fig_treemap, use_container_width=True)
-
-                    with viz_col2:
-                        st.markdown("#### ☀️ Sunburst Chart")
-                        st.caption("Hierarchical view from project → phase → area")
-
-                        # Create sunburst
-                        fig_sunburst = px.sunburst(
-                            df_agg,
-                            path=['Level_0', 'Level_1', 'Level_2'],
-                            values='Count',
-                            color='Health_Score',
-                            color_continuous_scale='RdYlGn',
-                            color_continuous_midpoint=50,
-                            range_color=[0, 100],
-                            title="WBS Hierarchy - Sunburst",
-                            hover_data={'Health_Score': ':.1f', 'Count': True}
-                        )
-                        fig_sunburst.update_layout(
-                            height=500,
-                            margin=dict(t=50, l=0, r=0, b=0)
-                        )
-                        st.plotly_chart(fig_sunburst, use_container_width=True)
-
-                    # Legend for health scores
-                    st.markdown("**Health Score Legend:**")
-                    legend_cols = st.columns(5)
-                    with legend_cols[0]:
-                        st.markdown("🟢 **Excellent** (80-100)")
-                    with legend_cols[1]:
-                        st.markdown("🟢 **Good** (65-79)")
-                    with legend_cols[2]:
-                        st.markdown("🟡 **Fair** (50-64)")
-                    with legend_cols[3]:
-                        st.markdown("🟠 **Poor** (35-49)")
-                    with legend_cols[4]:
-                        st.markdown("🔴 **Critical** (0-34)")
-                else:
-                    st.info("Unable to build hierarchy visualization. Activities may not have complete WBS data.")
-
-        st.markdown("---")
-
-        # WBS Level 1 Analysis
-        level1 = wbs_analysis.get('level_1_phases', {})
-        if level1:
-            st.markdown("### 📋 WBS Level 1 (Phases) Analysis")
-
-            # Prepare data for visualization
-            phases = []
-            for wbs_code, stats in level1.items():
-                health_data = stats.get('health_score', {})
-                phases.append({
-                    'Phase': f"Phase {wbs_code}",
-                    'Activities': stats['activity_count'],
-                    'Percentage': stats['percentage'],
-                    'Avg Float': stats.get('avg_float', 0),
-                    'Critical': stats.get('critical_count', 0),
-                    'Negative Float': stats.get('negative_float_count', 0),
-                    'Health Score': health_data.get('score', 0),
-                    'Rating': health_data.get('rating', 'Unknown')
-                })
-
-            df_phases = pd.DataFrame(phases)
-
-            # Display health score cards for each phase
-            st.markdown("#### Phase Health Scores")
-            health_cols = st.columns(min(len(phases), 5))  # Max 5 columns
-            for idx, phase_data in enumerate(phases[:5]):  # Show top 5
-                with health_cols[idx]:
-                    score = phase_data['Health Score']
-                    rating = phase_data['Rating']
-                    # Determine color based on score
-                    if score >= 80:
-                        color = "🟢"
-                    elif score >= 65:
-                        color = "🟢"
-                    elif score >= 50:
-                        color = "🟡"
-                    elif score >= 35:
-                        color = "🟠"
-                    else:
-                        color = "🔴"
-                    st.metric(
-                        phase_data['Phase'],
-                        f"{score:.0f}/100",
-                        delta=rating,
-                        delta_color="off"
-                    )
-                    st.caption(f"{color} {rating}")
-
-            st.markdown("---")
-
-            # Bar chart - Activities by Phase
-            col1, col2 = st.columns(2)
+            col1, col2, col3, col4 = st.columns(4)
 
             with col1:
-                st.markdown("#### Activities by Phase")
-                fig = px.bar(
-                    df_phases,
-                    x='Phase',
-                    y='Activities',
-                    text='Activities',
-                    color='Avg Float',
-                    color_continuous_scale='RdYlGn',
-                    title="Activity Distribution by WBS Phase"
-                )
-                fig.update_traces(textposition='outside')
-                fig.update_layout(height=400)
-                st.plotly_chart(fig, use_container_width=True)
+                st.metric("Total Activities", wbs_analysis['total_activities'])
 
             with col2:
-                st.markdown("#### Critical Activities by Phase")
-                fig = px.bar(
-                    df_phases,
-                    x='Phase',
-                    y='Critical',
-                    text='Critical',
-                    color='Critical',
-                    color_continuous_scale='Reds',
-                    title="Critical Activities by WBS Phase"
-                )
-                fig.update_traces(textposition='outside')
-                fig.update_layout(height=400)
-                st.plotly_chart(fig, use_container_width=True)
+                st.metric("With WBS Codes", wbs_analysis['activities_with_wbs'])
 
-            # Detailed table
-            st.markdown("#### Detailed Phase Statistics")
-            st.dataframe(
-                df_phases,
-                use_container_width=True,
-                column_config={
-                    "Phase": st.column_config.TextColumn("Phase"),
-                    "Activities": st.column_config.NumberColumn("Activities", format="%d"),
-                    "Percentage": st.column_config.NumberColumn("% of Total", format="%.1f%%"),
-                    "Avg Float": st.column_config.NumberColumn("Avg Float (days)", format="%.1f"),
-                    "Critical": st.column_config.NumberColumn("Critical Count", format="%d"),
-                    "Negative Float": st.column_config.NumberColumn("Behind Schedule", format="%d"),
-                    "Health Score": st.column_config.NumberColumn("Health Score", format="%.0f"),
-                    "Rating": st.column_config.TextColumn("Rating")
-                },
-                hide_index=True
-            )
+            with col3:
+                avg_depth = wbs_analysis.get('avg_depth', 0)
+                st.metric("Avg WBS Depth", f"{avg_depth:.1f}")
 
-        st.markdown("---")
-
-        # WBS Level 2 Analysis
-        level2 = wbs_analysis.get('level_2_areas', {})
-        if level2:
-            st.markdown("### 🗺️ WBS Level 2 (Areas) Analysis")
-
-            # Prepare data
-            areas = []
-            for wbs_code, stats in level2.items():
-                health_data = stats.get('health_score', {})
-                areas.append({
-                    'Area': f"Area {wbs_code}",
-                    'Activities': stats['activity_count'],
-                    'Percentage': stats['percentage'],
-                    'Avg Float': stats.get('avg_float', 0),
-                    'Critical': stats.get('critical_count', 0),
-                    '% Critical': round(stats.get('critical_count', 0) / stats['activity_count'] * 100, 1) if stats['activity_count'] > 0 else 0,
-                    'Health Score': health_data.get('score', 0),
-                    'Rating': health_data.get('rating', 'Unknown')
-                })
-
-            df_areas = pd.DataFrame(areas)
-
-            # Display health score cards for each area
-            st.markdown("#### Area Health Scores")
-            # Sort by health score to show critical areas first
-            areas_sorted_by_health = sorted(areas, key=lambda x: x['Health Score'])
-            health_cols = st.columns(min(len(areas), 5))  # Max 5 columns
-            for idx, area_data in enumerate(areas_sorted_by_health[:5]):  # Show worst 5
-                with health_cols[idx]:
-                    score = area_data['Health Score']
-                    rating = area_data['Rating']
-                    # Determine color based on score
-                    if score >= 80:
-                        color = "🟢"
-                    elif score >= 65:
-                        color = "🟢"
-                    elif score >= 50:
-                        color = "🟡"
-                    elif score >= 35:
-                        color = "🟠"
-                    else:
-                        color = "🔴"
-                    st.metric(
-                        area_data['Area'],
-                        f"{score:.0f}/100",
-                        delta=rating,
-                        delta_color="off"
-                    )
-                    st.caption(f"{color} {rating}")
+            with col4:
+                max_depth = wbs_analysis.get('max_depth', 0)
+                st.metric("Max WBS Depth", max_depth)
 
             st.markdown("---")
 
-            # Heatmap-style visualization
-            st.markdown("#### Area Health Overview")
+            # Advanced WBS Hierarchy Visualizations
+            st.markdown("### 🎨 WBS Hierarchy Visualization")
 
-            # Sort by % Critical (descending) to show problem areas first
-            df_areas_sorted = df_areas.sort_values('% Critical', ascending=False)
+            # Prepare hierarchical data for treemap and sunburst
+            level1 = wbs_analysis.get('level_1_phases', {})
+            level2 = wbs_analysis.get('level_2_areas', {})
 
-            fig = px.bar(
-                df_areas_sorted,
-                x='Area',
-                y='Activities',
-                color='% Critical',
-                color_continuous_scale='RdYlGn_r',  # Reverse: Red=high, Green=low
-                title="WBS Areas - Colored by % Critical Activities",
-                hover_data=['Avg Float', 'Critical', '% Critical']
-            )
-            fig.update_layout(height=400)
-            st.plotly_chart(fig, use_container_width=True)
+            if level1 or level2:
+                # Build hierarchical dataframe
+                hierarchy_data = []
 
-            # Detailed table
-            st.markdown("#### Detailed Area Statistics")
-            st.dataframe(
-                df_areas_sorted,
-                use_container_width=True,
-                column_config={
-                    "Area": st.column_config.TextColumn("Area"),
-                    "Activities": st.column_config.NumberColumn("Activities", format="%d"),
-                    "Percentage": st.column_config.NumberColumn("% of Total", format="%.1f%%"),
-                    "Avg Float": st.column_config.NumberColumn("Avg Float (days)", format="%.1f"),
-                    "Critical": st.column_config.NumberColumn("Critical Count", format="%d"),
-                    "% Critical": st.column_config.NumberColumn("% Critical", format="%.1f%%"),
-                    "Health Score": st.column_config.NumberColumn("Health Score", format="%.0f"),
-                    "Rating": st.column_config.TextColumn("Rating")
-                },
-                hide_index=True
-            )
+                # Get activities for building full hierarchy
+                activities = schedule['schedule_data'].get('activities', [])
+                if activities:
+                    df_activities = pd.DataFrame(activities)
 
-            # Identify problem areas
-            problem_areas = df_areas[df_areas['% Critical'] > 50]
-            if len(problem_areas) > 0:
-                st.warning(f"⚠️ {len(problem_areas)} area(s) have >50% critical activities")
-                st.write("**High-Risk Areas:**")
-                for _, area in problem_areas.iterrows():
-                    st.write(f"- **{area['Area']}**: {area['% Critical']:.0f}% critical ({area['Critical']}/{area['Activities']} activities)")
+                    # Check if we have WBS level columns
+                    if 'wbs_level_0' in df_activities.columns and 'wbs_level_1' in df_activities.columns:
+                        # Build hierarchy from activities
+                        for _, row in df_activities.iterrows():
+                            if pd.notna(row.get('wbs_level_0')):
+                                level0_name = str(row['wbs_level_0'])
+                                level1_name = str(row.get('wbs_level_1', '')) if pd.notna(row.get('wbs_level_1')) else None
+                                level2_name = str(row.get('wbs_level_2', '')) if pd.notna(row.get('wbs_level_2')) else None
 
-        # Guidance
-        st.markdown("---")
-        st.markdown("### 📖 WBS Analysis Interpretation")
+                                # Get health score for this path
+                                health_score = 50  # Default
+                                health_color = '#f39c12'  # Default orange
 
-        guidance_col1, guidance_col2 = st.columns(2)
+                                # Try to get health score from level1 stats
+                                if level1_name and level1_name in level1:
+                                    level1_stats = level1[level1_name]
+                                    if 'health_score' in level1_stats:
+                                        health_score = level1_stats['health_score'].get('score', 50)
+                                        health_color = level1_stats['health_score'].get('color', '#f39c12')
 
-        with guidance_col1:
-            st.markdown("""
-            **What to Look For:**
+                                # Try to get health score from level2 stats (more specific)
+                                if level2_name and level2_name in level2:
+                                    level2_stats = level2[level2_name]
+                                    if 'health_score' in level2_stats:
+                                        health_score = level2_stats['health_score'].get('score', 50)
+                                        health_color = level2_stats['health_score'].get('color', '#f39c12')
 
-            - **High % Critical in Phase/Area**: Indicates schedule risk and lack of flexibility
-            - **Low Average Float**: Suggests tight schedule in that area
-            - **Uneven Distribution**: May indicate poor work breakdown or sequencing issues
-            - **Areas with Negative Float**: Require immediate attention and recovery plan
-            """)
+                                hierarchy_data.append({
+                                    'Level_0': level0_name,
+                                    'Level_1': level1_name if level1_name else 'Unknown',
+                                    'Level_2': level2_name if level2_name else 'Unknown',
+                                    'Activity_ID': row.get('Activity ID', ''),
+                                    'Health_Score': health_score,
+                                    'Health_Color': health_color,
+                                    'Count': 1
+                                })
 
-        with guidance_col2:
-            st.markdown("""
-            **Recommended Actions:**
+                    if hierarchy_data:
+                        df_hierarchy = pd.DataFrame(hierarchy_data)
 
-            - **Areas >50% Critical**: Add parallel paths, review dependencies
-            - **Low Float Areas**: Add schedule buffer, consider resource loading
-            - **Behind Schedule**: Prioritize recovery actions, crash activities
-            - **Balanced WBS**: Aim for 5-15% critical across all major areas
-            """)
+                        # Aggregate for visualizations
+                        # Group by Level 0, Level 1, Level 2 and sum counts
+                        df_agg = df_hierarchy.groupby(['Level_0', 'Level_1', 'Level_2']).agg({
+                            'Count': 'sum',
+                            'Health_Score': 'mean'
+                        }).reset_index()
+
+                        viz_col1, viz_col2 = st.columns(2)
+
+                        with viz_col1:
+                            st.markdown("#### 🔲 Treemap View")
+                            st.caption("Size = activity count, Color = health score")
+
+                            # Create treemap
+                            fig_treemap = px.treemap(
+                                df_agg,
+                                path=['Level_0', 'Level_1', 'Level_2'],
+                                values='Count',
+                                color='Health_Score',
+                                color_continuous_scale='RdYlGn',
+                                color_continuous_midpoint=50,
+                                range_color=[0, 100],
+                                title="WBS Hierarchy - Treemap",
+                                hover_data={'Health_Score': ':.1f', 'Count': True}
+                            )
+                            fig_treemap.update_layout(
+                                height=500,
+                                margin=dict(t=50, l=0, r=0, b=0)
+                            )
+                            fig_treemap.update_traces(
+                                textposition='middle center',
+                                textfont_size=11
+                            )
+                            st.plotly_chart(fig_treemap, use_container_width=True)
+
+                        with viz_col2:
+                            st.markdown("#### ☀️ Sunburst Chart")
+                            st.caption("Hierarchical view from project → phase → area")
+
+                            # Create sunburst
+                            fig_sunburst = px.sunburst(
+                                df_agg,
+                                path=['Level_0', 'Level_1', 'Level_2'],
+                                values='Count',
+                                color='Health_Score',
+                                color_continuous_scale='RdYlGn',
+                                color_continuous_midpoint=50,
+                                range_color=[0, 100],
+                                title="WBS Hierarchy - Sunburst",
+                                hover_data={'Health_Score': ':.1f', 'Count': True}
+                            )
+                            fig_sunburst.update_layout(
+                                height=500,
+                                margin=dict(t=50, l=0, r=0, b=0)
+                            )
+                            st.plotly_chart(fig_sunburst, use_container_width=True)
+
+                        # Legend for health scores
+                        st.markdown("**Health Score Legend:**")
+                        legend_cols = st.columns(5)
+                        with legend_cols[0]:
+                            st.markdown("🟢 **Excellent** (80-100)")
+                        with legend_cols[1]:
+                            st.markdown("🟢 **Good** (65-79)")
+                        with legend_cols[2]:
+                            st.markdown("🟡 **Fair** (50-64)")
+                        with legend_cols[3]:
+                            st.markdown("🟠 **Poor** (35-49)")
+                        with legend_cols[4]:
+                            st.markdown("🔴 **Critical** (0-34)")
+                    else:
+                        st.info("Unable to build hierarchy visualization. Activities may not have complete WBS data.")
+
+            st.markdown("---")
+
+            # WBS Level 1 Analysis
+            level1 = wbs_analysis.get('level_1_phases', {})
+            if level1:
+                st.markdown("### 📋 WBS Level 1 (Phases) Analysis")
+
+                # Prepare data for visualization
+                phases = []
+                for wbs_code, stats in level1.items():
+                    health_data = stats.get('health_score', {})
+                    phases.append({
+                        'Phase': f"Phase {wbs_code}",
+                        'Activities': stats['activity_count'],
+                        'Percentage': stats['percentage'],
+                        'Avg Float': stats.get('avg_float', 0),
+                        'Critical': stats.get('critical_count', 0),
+                        'Negative Float': stats.get('negative_float_count', 0),
+                        'Health Score': health_data.get('score', 0),
+                        'Rating': health_data.get('rating', 'Unknown')
+                    })
+
+                df_phases = pd.DataFrame(phases)
+
+                # Display health score cards for each phase
+                st.markdown("#### Phase Health Scores")
+                health_cols = st.columns(min(len(phases), 5))  # Max 5 columns
+                for idx, phase_data in enumerate(phases[:5]):  # Show top 5
+                    with health_cols[idx]:
+                        score = phase_data['Health Score']
+                        rating = phase_data['Rating']
+                        # Determine color based on score
+                        if score >= 80:
+                            color = "🟢"
+                        elif score >= 65:
+                            color = "🟢"
+                        elif score >= 50:
+                            color = "🟡"
+                        elif score >= 35:
+                            color = "🟠"
+                        else:
+                            color = "🔴"
+                        st.metric(
+                            phase_data['Phase'],
+                            f"{score:.0f}/100",
+                            delta=rating,
+                            delta_color="off"
+                        )
+                        st.caption(f"{color} {rating}")
+
+                st.markdown("---")
+
+                # Bar chart - Activities by Phase
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown("#### Activities by Phase")
+                    fig = px.bar(
+                        df_phases,
+                        x='Phase',
+                        y='Activities',
+                        text='Activities',
+                        color='Avg Float',
+                        color_continuous_scale='RdYlGn',
+                        title="Activity Distribution by WBS Phase"
+                    )
+                    fig.update_traces(textposition='outside')
+                    fig.update_layout(height=400)
+                    st.plotly_chart(fig, use_container_width=True)
+
+                with col2:
+                    st.markdown("#### Critical Activities by Phase")
+                    fig = px.bar(
+                        df_phases,
+                        x='Phase',
+                        y='Critical',
+                        text='Critical',
+                        color='Critical',
+                        color_continuous_scale='Reds',
+                        title="Critical Activities by WBS Phase"
+                    )
+                    fig.update_traces(textposition='outside')
+                    fig.update_layout(height=400)
+                    st.plotly_chart(fig, use_container_width=True)
+
+                # Detailed table
+                st.markdown("#### Detailed Phase Statistics")
+                st.dataframe(
+                    df_phases,
+                    use_container_width=True,
+                    column_config={
+                        "Phase": st.column_config.TextColumn("Phase"),
+                        "Activities": st.column_config.NumberColumn("Activities", format="%d"),
+                        "Percentage": st.column_config.NumberColumn("% of Total", format="%.1f%%"),
+                        "Avg Float": st.column_config.NumberColumn("Avg Float (days)", format="%.1f"),
+                        "Critical": st.column_config.NumberColumn("Critical Count", format="%d"),
+                        "Negative Float": st.column_config.NumberColumn("Behind Schedule", format="%d"),
+                        "Health Score": st.column_config.NumberColumn("Health Score", format="%.0f"),
+                        "Rating": st.column_config.TextColumn("Rating")
+                    },
+                    hide_index=True
+                )
+
+            st.markdown("---")
+
+            # WBS Level 2 Analysis
+            level2 = wbs_analysis.get('level_2_areas', {})
+            if level2:
+                st.markdown("### 🗺️ WBS Level 2 (Areas) Analysis")
+
+                # Prepare data
+                areas = []
+                for wbs_code, stats in level2.items():
+                    health_data = stats.get('health_score', {})
+                    areas.append({
+                        'Area': f"Area {wbs_code}",
+                        'Activities': stats['activity_count'],
+                        'Percentage': stats['percentage'],
+                        'Avg Float': stats.get('avg_float', 0),
+                        'Critical': stats.get('critical_count', 0),
+                        '% Critical': round(stats.get('critical_count', 0) / stats['activity_count'] * 100, 1) if stats['activity_count'] > 0 else 0,
+                        'Health Score': health_data.get('score', 0),
+                        'Rating': health_data.get('rating', 'Unknown')
+                    })
+
+                df_areas = pd.DataFrame(areas)
+
+                # Display health score cards for each area
+                st.markdown("#### Area Health Scores")
+                # Sort by health score to show critical areas first
+                areas_sorted_by_health = sorted(areas, key=lambda x: x['Health Score'])
+                health_cols = st.columns(min(len(areas), 5))  # Max 5 columns
+                for idx, area_data in enumerate(areas_sorted_by_health[:5]):  # Show worst 5
+                    with health_cols[idx]:
+                        score = area_data['Health Score']
+                        rating = area_data['Rating']
+                        # Determine color based on score
+                        if score >= 80:
+                            color = "🟢"
+                        elif score >= 65:
+                            color = "🟢"
+                        elif score >= 50:
+                            color = "🟡"
+                        elif score >= 35:
+                            color = "🟠"
+                        else:
+                            color = "🔴"
+                        st.metric(
+                            area_data['Area'],
+                            f"{score:.0f}/100",
+                            delta=rating,
+                            delta_color="off"
+                        )
+                        st.caption(f"{color} {rating}")
+
+                st.markdown("---")
+
+                # Heatmap-style visualization
+                st.markdown("#### Area Health Overview")
+
+                # Sort by % Critical (descending) to show problem areas first
+                df_areas_sorted = df_areas.sort_values('% Critical', ascending=False)
+
+                fig = px.bar(
+                    df_areas_sorted,
+                    x='Area',
+                    y='Activities',
+                    color='% Critical',
+                    color_continuous_scale='RdYlGn_r',  # Reverse: Red=high, Green=low
+                    title="WBS Areas - Colored by % Critical Activities",
+                    hover_data=['Avg Float', 'Critical', '% Critical']
+                )
+                fig.update_layout(height=400)
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Detailed table
+                st.markdown("#### Detailed Area Statistics")
+                st.dataframe(
+                    df_areas_sorted,
+                    use_container_width=True,
+                    column_config={
+                        "Area": st.column_config.TextColumn("Area"),
+                        "Activities": st.column_config.NumberColumn("Activities", format="%d"),
+                        "Percentage": st.column_config.NumberColumn("% of Total", format="%.1f%%"),
+                        "Avg Float": st.column_config.NumberColumn("Avg Float (days)", format="%.1f"),
+                        "Critical": st.column_config.NumberColumn("Critical Count", format="%d"),
+                        "% Critical": st.column_config.NumberColumn("% Critical", format="%.1f%%"),
+                        "Health Score": st.column_config.NumberColumn("Health Score", format="%.0f"),
+                        "Rating": st.column_config.TextColumn("Rating")
+                    },
+                    hide_index=True
+                )
+
+                # Identify problem areas
+                problem_areas = df_areas[df_areas['% Critical'] > 50]
+                if len(problem_areas) > 0:
+                    st.warning(f"⚠️ {len(problem_areas)} area(s) have >50% critical activities")
+                    st.write("**High-Risk Areas:**")
+                    for _, area in problem_areas.iterrows():
+                        st.write(f"- **{area['Area']}**: {area['% Critical']:.0f}% critical ({area['Critical']}/{area['Activities']} activities)")
+
+            # Guidance
+            st.markdown("---")
+            st.markdown("### 📖 WBS Analysis Interpretation")
+
+            guidance_col1, guidance_col2 = st.columns(2)
+
+            with guidance_col1:
+                st.markdown("""
+                **What to Look For:**
+
+                - **High % Critical in Phase/Area**: Indicates schedule risk and lack of flexibility
+                - **Low Average Float**: Suggests tight schedule in that area
+                - **Uneven Distribution**: May indicate poor work breakdown or sequencing issues
+                - **Areas with Negative Float**: Require immediate attention and recovery plan
+                """)
+
+            with guidance_col2:
+                st.markdown("""
+                **Recommended Actions:**
+
+                - **Areas >50% Critical**: Add parallel paths, review dependencies
+                - **Low Float Areas**: Add schedule buffer, consider resource loading
+                - **Behind Schedule**: Prioritize recovery actions, crash activities
+                - **Balanced WBS**: Aim for 5-15% critical across all major areas
+                """)
+
+    except Exception as e:
+        st.error("⚠️ An error occurred in WBS Analysis")
+        st.error(f"Error details: {str(e)}")
+        st.info("Please try refreshing the page or re-uploading the schedule. If the problem persists, contact support.")
+
+        # Show detailed traceback in an expander for debugging
+        import traceback
+        with st.expander("🔧 Technical Details (for debugging)"):
+            st.code(traceback.format_exc())
 
 # ============================================================================
 # Tab 5: Issues
