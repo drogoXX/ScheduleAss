@@ -40,8 +40,16 @@ class DCMAAnalyzer:
         self._analyze_missing_logic()
         self._analyze_open_ends()
 
+        # DCMA-specific metrics
+        self._analyze_negative_float()  # DCMA #5
+        self._analyze_missing_predecessors()  # DCMA #6
+        self._analyze_missing_successors()  # DCMA #7
+        self._analyze_invalid_dates()  # DCMA #9
+        self._analyze_high_float_dcma()  # DCMA #4 - High Float (>44 days)
+
         # Duration Analysis
         self._analyze_long_durations()
+        self._analyze_long_durations_dcma()  # DCMA #8 - Long Duration (>44 days)
         self._analyze_average_duration()
 
         # Float Analysis
@@ -54,6 +62,7 @@ class DCMAAnalyzer:
 
         # Resource Analysis
         self._analyze_resource_assignment()
+        self._analyze_missing_resources_dcma()  # DCMA #10
 
         # Milestone Validation
         self._analyze_milestones()
@@ -63,6 +72,7 @@ class DCMAAnalyzer:
 
         # Relationship Types
         self._analyze_relationship_types()
+        self._analyze_ss_ff_relationships()  # DCMA #11
 
         # Status Analysis
         self._analyze_activity_status()
@@ -865,6 +875,596 @@ class DCMAAnalyzer:
             'distribution': status_distribution,
             'total_activities': len(self.df)
         }
+
+    def _analyze_negative_float(self):
+        """
+        DCMA #5: Negative Float
+        Target: 0% (no activities behind schedule)
+        """
+        if 'Total Float' not in self.df.columns:
+            self.metrics['dcma_negative_float'] = {
+                'count': 0,
+                'percentage': 0,
+                'total_activities': len(self.df),
+                'activities': [],
+                'target': 0,
+                'status': 'unknown',
+                'error': 'Total Float column not available'
+            }
+            return
+
+        negative_float_activities = []
+        float_series = self.df['Total Float'].dropna()
+
+        for idx, row in self.df.iterrows():
+            total_float = row.get('Total Float')
+            if pd.notna(total_float) and total_float < 0:
+                negative_float_activities.append({
+                    'activity_id': row['Activity ID'],
+                    'activity_name': row['Activity Name'],
+                    'total_float': float(total_float),
+                    'wbs_code': str(row.get('WBS Code', 'N/A'))
+                })
+
+        total_activities = len(float_series)
+        percentage = (len(negative_float_activities) / total_activities * 100) if total_activities > 0 else 0
+
+        self.metrics['dcma_negative_float'] = {
+            'count': len(negative_float_activities),
+            'percentage': round(percentage, 2),
+            'total_activities': total_activities,
+            'activities': negative_float_activities,
+            'target': 0,
+            'status': 'pass' if len(negative_float_activities) == 0 else 'fail',
+            'result_text': f'{percentage:.1f}% (Target: 0%)'
+        }
+
+        # Issue already created in comprehensive_float analysis
+
+    def _analyze_missing_predecessors(self):
+        """
+        DCMA #6: Missing Predecessors
+        Target: ≤1 activity (excluding start milestone)
+        """
+        missing_pred_activities = []
+
+        for idx, row in self.df.iterrows():
+            if row.get('missing_predecessor', False):
+                missing_pred_activities.append({
+                    'activity_id': row['Activity ID'],
+                    'activity_name': row['Activity Name'],
+                    'status': row.get('Activity Status', 'Unknown'),
+                    'duration': row.get('At Completion Duration', 0)
+                })
+
+        count = len(missing_pred_activities)
+
+        self.metrics['dcma_missing_predecessors'] = {
+            'count': count,
+            'activities': missing_pred_activities,
+            'target': 1,
+            'status': 'pass' if count <= 1 else 'fail',
+            'result_text': f'{count} activities (Target: ≤1)'
+        }
+
+    def _analyze_missing_successors(self):
+        """
+        DCMA #7: Missing Successors
+        Target: ≤1 activity (excluding finish milestone)
+        """
+        missing_succ_activities = []
+
+        for idx, row in self.df.iterrows():
+            if row.get('missing_successor', False):
+                missing_succ_activities.append({
+                    'activity_id': row['Activity ID'],
+                    'activity_name': row['Activity Name'],
+                    'status': row.get('Activity Status', 'Unknown'),
+                    'duration': row.get('At Completion Duration', 0)
+                })
+
+        count = len(missing_succ_activities)
+
+        self.metrics['dcma_missing_successors'] = {
+            'count': count,
+            'activities': missing_succ_activities,
+            'target': 1,
+            'status': 'pass' if count <= 1 else 'fail',
+            'result_text': f'{count} activities (Target: ≤1)'
+        }
+
+    def _analyze_long_durations_dcma(self):
+        """
+        DCMA #8: Long Duration Activities
+        Target: <5% of activities with duration >44 working days
+        Exclude: Milestones (0 duration), completed activities
+        """
+        long_activities = []
+        duration_col = 'At Completion Duration'
+
+        if duration_col not in self.df.columns:
+            self.metrics['dcma_long_durations'] = {
+                'count': 0,
+                'percentage': 0,
+                'total_analyzed': 0,
+                'activities': [],
+                'threshold': 44,
+                'target': 5.0,
+                'status': 'unknown',
+                'error': 'At Completion Duration column not available'
+            }
+            return
+
+        # Filter: incomplete activities, non-milestones
+        incomplete_df = self.df.copy()
+        if 'Activity Status' in self.df.columns:
+            incomplete_df = incomplete_df[incomplete_df['Activity Status'] != 'Completed']
+
+        # Exclude milestones
+        if 'Activity Type' in incomplete_df.columns:
+            incomplete_df = incomplete_df[~incomplete_df['Activity Type'].str.contains('Milestone', case=False, na=False)]
+
+        total_analyzed = len(incomplete_df)
+
+        for idx, row in incomplete_df.iterrows():
+            duration = row.get(duration_col, 0)
+            if pd.notna(duration) and duration > 44:
+                long_activities.append({
+                    'activity_id': row['Activity ID'],
+                    'activity_name': row['Activity Name'],
+                    'duration': int(duration)
+                })
+
+        percentage = (len(long_activities) / total_analyzed * 100) if total_analyzed > 0 else 0
+
+        self.metrics['dcma_long_durations'] = {
+            'count': len(long_activities),
+            'percentage': round(percentage, 2),
+            'total_analyzed': total_analyzed,
+            'activities': long_activities,
+            'threshold': 44,
+            'target': 5.0,
+            'status': 'pass' if percentage < 5.0 else 'fail',
+            'result_text': f'{percentage:.1f}% (Target: <5%)'
+        }
+
+        if percentage >= 5.0:
+            self.issues.append({
+                'category': 'Schedule Granularity',
+                'severity': 'medium',
+                'title': f'DCMA: Long Duration Activities: {percentage:.1f}%',
+                'description': f'Found {len(long_activities)} incomplete activities exceeding 44 working days ({percentage:.1f}% of incomplete activities). DCMA target is <5%.',
+                'count': len(long_activities),
+                'recommendation': 'Decompose activities >44 days into smaller tasks with clearer deliverables and progress tracking.',
+                'affected_activities': [a['activity_id'] for a in long_activities]
+            })
+
+    def _analyze_invalid_dates(self):
+        """
+        DCMA #9: Invalid Dates
+        Target: 0 activities with dates before data date or >5 years in future
+        """
+        invalid_date_activities = []
+
+        if 'Start' not in self.df.columns or 'Finish' not in self.df.columns:
+            self.metrics['dcma_invalid_dates'] = {
+                'count': 0,
+                'activities': [],
+                'target': 0,
+                'status': 'unknown',
+                'error': 'Start/Finish date columns not available'
+            }
+            return
+
+        # Determine data date (use earliest start as proxy if not available)
+        data_date = self.schedule_data.get('data_date')
+        if data_date is None:
+            data_date = self.df['Start'].min()
+
+        # 5 years from data date
+        five_years_future = pd.Timestamp(data_date) + pd.DateOffset(years=5)
+
+        for idx, row in self.df.iterrows():
+            start_date = row.get('Start')
+            finish_date = row.get('Finish')
+            status = row.get('Activity Status', '')
+
+            issues = []
+
+            # Check if start > 5 years in future
+            if pd.notna(start_date) and start_date > five_years_future:
+                issues.append(f'Start date {start_date.date()} is >5 years in future')
+
+            # Check if incomplete activity starts before data date
+            if status != 'Completed' and pd.notna(start_date) and start_date < pd.Timestamp(data_date):
+                issues.append(f'Incomplete activity with start date {start_date.date()} before data date')
+
+            if issues:
+                invalid_date_activities.append({
+                    'activity_id': row['Activity ID'],
+                    'activity_name': row['Activity Name'],
+                    'start': start_date.date() if pd.notna(start_date) else None,
+                    'finish': finish_date.date() if pd.notna(finish_date) else None,
+                    'status': status,
+                    'issues': '; '.join(issues)
+                })
+
+        self.metrics['dcma_invalid_dates'] = {
+            'count': len(invalid_date_activities),
+            'activities': invalid_date_activities,
+            'target': 0,
+            'status': 'pass' if len(invalid_date_activities) == 0 else 'fail',
+            'result_text': f'{len(invalid_date_activities)} found (Target: 0)'
+        }
+
+        if len(invalid_date_activities) > 0:
+            self.issues.append({
+                'category': 'Schedule Realism',
+                'severity': 'medium',
+                'title': f'DCMA: Invalid Dates: {len(invalid_date_activities)} activities',
+                'description': f'Found {len(invalid_date_activities)} activities with invalid dates (before data date or >5 years in future).',
+                'count': len(invalid_date_activities),
+                'recommendation': 'Review and correct activity dates. Ensure incomplete activities do not have start dates before the data date.',
+                'affected_activities': [a['activity_id'] for a in invalid_date_activities]
+            })
+
+    def _analyze_high_float_dcma(self):
+        """
+        DCMA #4: Missing Logic (High Float >44 days)
+        Target: <5% of activities with float >44 days
+        """
+        if 'Total Float' not in self.df.columns:
+            self.metrics['dcma_high_float'] = {
+                'count': 0,
+                'percentage': 0,
+                'total_activities': len(self.df),
+                'activities': [],
+                'threshold': 44,
+                'target': 5.0,
+                'status': 'unknown',
+                'error': 'Total Float column not available'
+            }
+            return
+
+        high_float_activities = []
+        float_series = self.df['Total Float'].dropna()
+
+        for idx, row in self.df.iterrows():
+            total_float = row.get('Total Float')
+            if pd.notna(total_float) and total_float > 44:
+                high_float_activities.append({
+                    'activity_id': row['Activity ID'],
+                    'activity_name': row['Activity Name'],
+                    'total_float': float(total_float)
+                })
+
+        total_activities = len(float_series)
+        percentage = (len(high_float_activities) / total_activities * 100) if total_activities > 0 else 0
+
+        self.metrics['dcma_high_float'] = {
+            'count': len(high_float_activities),
+            'percentage': round(percentage, 2),
+            'total_activities': total_activities,
+            'activities': high_float_activities,
+            'threshold': 44,
+            'target': 5.0,
+            'status': 'pass' if percentage < 5.0 else 'fail',
+            'result_text': f'{percentage:.1f}% (Target: <5%)'
+        }
+
+        if percentage >= 5.0:
+            self.issues.append({
+                'category': 'Logic Quality',
+                'severity': 'medium',
+                'title': f'DCMA: High Float (>44 days): {percentage:.1f}%',
+                'description': f'Found {len(high_float_activities)} activities with float >44 days ({percentage:.1f}% of activities). DCMA target is <5%. High float may indicate missing logic.',
+                'count': len(high_float_activities),
+                'recommendation': 'Review activities with excessive float for missing predecessors/successors. Add logic relationships to reduce float.',
+                'affected_activities': [a['activity_id'] for a in high_float_activities[:20]]
+            })
+
+    def _analyze_missing_resources_dcma(self):
+        """
+        DCMA #10: Missing Resources
+        Target: ≤5% of incomplete activities without resource assignments
+        """
+        if 'Resource Names' not in self.df.columns:
+            self.metrics['dcma_missing_resources'] = {
+                'count': 0,
+                'percentage': 0,
+                'total_incomplete': 0,
+                'activities': [],
+                'target': 5.0,
+                'status': 'n/a',
+                'result_text': 'N/A - Resource data not in export'
+            }
+            return
+
+        # Filter to incomplete activities only
+        incomplete_df = self.df.copy()
+        if 'Activity Status' in self.df.columns:
+            incomplete_df = incomplete_df[incomplete_df['Activity Status'] != 'Completed']
+
+        total_incomplete = len(incomplete_df)
+        unassigned_activities = []
+
+        for idx, row in incomplete_df.iterrows():
+            resources = row.get('Resource Names', '')
+            if pd.isna(resources) or str(resources).strip() == '' or str(resources).lower() == 'nan':
+                unassigned_activities.append({
+                    'activity_id': row['Activity ID'],
+                    'activity_name': row['Activity Name'],
+                    'status': row.get('Activity Status', 'Unknown')
+                })
+
+        percentage = (len(unassigned_activities) / total_incomplete * 100) if total_incomplete > 0 else 0
+
+        self.metrics['dcma_missing_resources'] = {
+            'count': len(unassigned_activities),
+            'percentage': round(percentage, 2),
+            'total_incomplete': total_incomplete,
+            'activities': unassigned_activities,
+            'target': 5.0,
+            'status': 'pass' if percentage <= 5.0 else 'fail',
+            'result_text': f'{percentage:.1f}% (Target: ≤5%)'
+        }
+
+        if percentage > 5.0:
+            self.issues.append({
+                'category': 'Execution Readiness',
+                'severity': 'medium',
+                'title': f'DCMA: Missing Resources: {percentage:.1f}%',
+                'description': f'Found {len(unassigned_activities)} incomplete activities without resource assignments ({percentage:.1f}% of incomplete activities). DCMA target is ≤5%.',
+                'count': len(unassigned_activities),
+                'recommendation': 'Assign resources to all incomplete activities. Resource loading is essential for realistic schedule and capacity planning.',
+                'affected_activities': [a['activity_id'] for a in unassigned_activities[:20]]
+            })
+
+    def _analyze_ss_ff_relationships(self):
+        """
+        DCMA #11: SS/FF Relationships (Leads)
+        Target: ≤10% of relationships are Start-to-Start or Finish-to-Finish
+        """
+        ss_ff_relationships = []
+        total_relationships = 0
+
+        for idx, row in self.df.iterrows():
+            predecessors = row.get('predecessor_list', [])
+            for pred in predecessors:
+                total_relationships += 1
+                rel_type = pred.get('type', 'FS')
+                if rel_type in ['SS', 'FF']:
+                    ss_ff_relationships.append({
+                        'activity_id': row['Activity ID'],
+                        'activity_name': row['Activity Name'],
+                        'predecessor': pred['activity'],
+                        'type': rel_type,
+                        'lag': pred.get('lag', 0)
+                    })
+
+        percentage = (len(ss_ff_relationships) / total_relationships * 100) if total_relationships > 0 else 0
+
+        self.metrics['dcma_ss_ff_relationships'] = {
+            'count': len(ss_ff_relationships),
+            'total_relationships': total_relationships,
+            'percentage': round(percentage, 2),
+            'activities': ss_ff_relationships,
+            'target': 10.0,
+            'status': 'pass' if percentage <= 10.0 else 'fail',
+            'result_text': f'{percentage:.1f}% (Target: ≤10%)'
+        }
+
+        if percentage > 10.0:
+            self.issues.append({
+                'category': 'Logic Quality',
+                'severity': 'low',
+                'title': f'DCMA: Excessive SS/FF Relationships: {percentage:.1f}%',
+                'description': f'Found {len(ss_ff_relationships)} SS/FF relationships ({percentage:.1f}% of total). DCMA target is ≤10%. Excessive SS/FF may indicate complex or non-standard logic.',
+                'count': len(ss_ff_relationships),
+                'recommendation': 'Review SS and FF relationships. While valid, excessive use may complicate schedule understanding. Consider if FS relationships with leads would be clearer.',
+                'affected_activities': [r['activity_id'] for r in ss_ff_relationships[:20]]
+            })
+
+    def get_dcma_14_point_summary(self, cpli: float, bei: float) -> Dict:
+        """
+        Generate complete DCMA 14-Point Assessment summary
+
+        Args:
+            cpli: Critical Path Length Index from MetricsCalculator
+            bei: Baseline Execution Index from MetricsCalculator
+
+        Returns:
+            Dictionary with complete 14-point assessment including overall score
+        """
+        dcma_14 = {
+            'overall_score': 0,
+            'overall_pass_count': 0,
+            'overall_fail_count': 0,
+            'overall_na_count': 0,
+            'overall_manual_count': 0,
+            'categories': {}
+        }
+
+        # Category 1: Logic and Network Integrity
+        cat1_metrics = [
+            {
+                'number': 1,
+                'name': 'Negative Lags (Leads)',
+                'status': self.metrics.get('negative_lags', {}).get('status', 'unknown'),
+                'result': self.metrics.get('negative_lags', {}).get('count', 0),
+                'target': '0',
+                'description': f"{self.metrics.get('negative_lags', {}).get('count', 0)} found (Target: 0)",
+                'recommendation': 'Eliminate all negative lags; restructure task relationships using appropriate logic types' if self.metrics.get('negative_lags', {}).get('status') == 'fail' else None
+            },
+            {
+                'number': 2,
+                'name': 'Positive Lags',
+                'status': self.metrics.get('positive_lags', {}).get('status', 'unknown'),
+                'result': self.metrics.get('positive_lags', {}).get('percentage', 0),
+                'target': '≤5%',
+                'description': f"{self.metrics.get('positive_lags', {}).get('percentage', 0):.1f}% (Target: ≤5%)",
+                'recommendation': 'Reduce positive lags; create separate waiting activities' if self.metrics.get('positive_lags', {}).get('status') in ['fail', 'warning'] else None
+            },
+            {
+                'number': 3,
+                'name': 'Hard Constraints',
+                'status': self.metrics.get('hard_constraints', {}).get('status', 'unknown'),
+                'result': self.metrics.get('hard_constraints', {}).get('percentage', 0),
+                'target': '≤10%',
+                'description': f"{self.metrics.get('hard_constraints', {}).get('percentage', 0):.1f}% (Target: ≤10%)",
+                'recommendation': 'Remove unnecessary hard constraints; use logic-driven scheduling' if self.metrics.get('hard_constraints', {}).get('status') == 'fail' else None
+            },
+            {
+                'number': 4,
+                'name': 'Missing Logic (High Float >44d)',
+                'status': self.metrics.get('dcma_high_float', {}).get('status', 'unknown'),
+                'result': self.metrics.get('dcma_high_float', {}).get('percentage', 0),
+                'target': '<5%',
+                'description': f"{self.metrics.get('dcma_high_float', {}).get('percentage', 0):.1f}% (Target: <5%)",
+                'recommendation': 'Add logic relationships to activities with excessive float' if self.metrics.get('dcma_high_float', {}).get('status') == 'fail' else None
+            },
+            {
+                'number': 5,
+                'name': 'Negative Float',
+                'status': self.metrics.get('dcma_negative_float', {}).get('status', 'unknown'),
+                'result': self.metrics.get('dcma_negative_float', {}).get('percentage', 0),
+                'target': '0%',
+                'description': f"{self.metrics.get('dcma_negative_float', {}).get('percentage', 0):.1f}% (Target: 0%)",
+                'recommendation': 'Crash activities, add resources, or negotiate deadline extension' if self.metrics.get('dcma_negative_float', {}).get('status') == 'fail' else None
+            },
+            {
+                'number': 6,
+                'name': 'Missing Predecessors',
+                'status': self.metrics.get('dcma_missing_predecessors', {}).get('status', 'unknown'),
+                'result': self.metrics.get('dcma_missing_predecessors', {}).get('count', 0),
+                'target': '≤1',
+                'description': f"{self.metrics.get('dcma_missing_predecessors', {}).get('count', 0)} activities (Target: ≤1)",
+                'recommendation': 'Add predecessor relationships to open-start activities' if self.metrics.get('dcma_missing_predecessors', {}).get('status') == 'fail' else None
+            },
+            {
+                'number': 7,
+                'name': 'Missing Successors',
+                'status': self.metrics.get('dcma_missing_successors', {}).get('status', 'unknown'),
+                'result': self.metrics.get('dcma_missing_successors', {}).get('count', 0),
+                'target': '≤1',
+                'description': f"{self.metrics.get('dcma_missing_successors', {}).get('count', 0)} activities (Target: ≤1)",
+                'recommendation': 'Add successor relationships to open-finish activities' if self.metrics.get('dcma_missing_successors', {}).get('status') == 'fail' else None
+            }
+        ]
+
+        # Category 2: Schedule Realism Checks
+        cat2_metrics = [
+            {
+                'number': 8,
+                'name': 'Long Duration Activities (>44d)',
+                'status': self.metrics.get('dcma_long_durations', {}).get('status', 'unknown'),
+                'result': self.metrics.get('dcma_long_durations', {}).get('percentage', 0),
+                'target': '<5%',
+                'description': f"{self.metrics.get('dcma_long_durations', {}).get('percentage', 0):.1f}% (Target: <5%)",
+                'recommendation': 'Decompose activities >44 days into smaller tasks' if self.metrics.get('dcma_long_durations', {}).get('status') == 'fail' else None
+            },
+            {
+                'number': 9,
+                'name': 'Invalid Dates',
+                'status': self.metrics.get('dcma_invalid_dates', {}).get('status', 'unknown'),
+                'result': self.metrics.get('dcma_invalid_dates', {}).get('count', 0),
+                'target': '0',
+                'description': f"{self.metrics.get('dcma_invalid_dates', {}).get('count', 0)} found (Target: 0)",
+                'recommendation': 'Correct activity dates; ensure realistic scheduling' if self.metrics.get('dcma_invalid_dates', {}).get('status') == 'fail' else None
+            }
+        ]
+
+        # Category 3: Execution Readiness
+        cat3_metrics = [
+            {
+                'number': 10,
+                'name': 'Missing Resources',
+                'status': self.metrics.get('dcma_missing_resources', {}).get('status', 'unknown'),
+                'result': self.metrics.get('dcma_missing_resources', {}).get('percentage', 0),
+                'target': '≤5%',
+                'description': self.metrics.get('dcma_missing_resources', {}).get('result_text', 'N/A'),
+                'recommendation': 'Assign resources to all incomplete activities' if self.metrics.get('dcma_missing_resources', {}).get('status') == 'fail' else None
+            },
+            {
+                'number': 11,
+                'name': 'SS/FF Relationships',
+                'status': self.metrics.get('dcma_ss_ff_relationships', {}).get('status', 'unknown'),
+                'result': self.metrics.get('dcma_ss_ff_relationships', {}).get('percentage', 0),
+                'target': '≤10%',
+                'description': f"{self.metrics.get('dcma_ss_ff_relationships', {}).get('percentage', 0):.1f}% (Target: ≤10%)",
+                'recommendation': 'Review and reduce SS/FF relationships; prefer FS logic' if self.metrics.get('dcma_ss_ff_relationships', {}).get('status') == 'fail' else None
+            }
+        ]
+
+        # Category 4: Performance Metrics
+        cpli_status = 'pass' if cpli >= 0.95 else 'fail'
+        bei_status = 'pass' if bei >= 0.95 else ('n/a' if bei == 0 else 'fail')
+
+        cat4_metrics = [
+            {
+                'number': 12,
+                'name': 'Critical Path Length Index (CPLI)',
+                'status': cpli_status,
+                'result': cpli,
+                'target': '≥0.95',
+                'description': f"{cpli:.3f} (Target: ≥0.95)",
+                'recommendation': 'Add contingency or reduce scope; schedule may be too aggressive' if cpli_status == 'fail' else None
+            },
+            {
+                'number': 13,
+                'name': 'Baseline Execution Index (BEI)',
+                'status': bei_status,
+                'result': bei,
+                'target': '≥0.95',
+                'description': f"{bei:.3f} (Target: ≥0.95)" if bei > 0 else "N/A - Baseline dates not available",
+                'recommendation': 'Improve execution or rebaseline schedule' if bei_status == 'fail' else None
+            }
+        ]
+
+        # Category 5: Critical Path Validation
+        cat5_metrics = [
+            {
+                'number': 14,
+                'name': 'Critical Path Test',
+                'status': 'manual',
+                'result': 'Manual Test Required',
+                'target': 'Manual Verification',
+                'description': 'Insert 5-day activity on critical path and verify schedule extends by 5 days',
+                'recommendation': 'To test: Insert test activity on critical path in P6 and verify finish date extends appropriately'
+            }
+        ]
+
+        # Store categories
+        dcma_14['categories'] = {
+            'Logic and Network Integrity': {'metrics': cat1_metrics, 'number': 1},
+            'Schedule Realism Checks': {'metrics': cat2_metrics, 'number': 2},
+            'Execution Readiness': {'metrics': cat3_metrics, 'number': 3},
+            'Performance Metrics': {'metrics': cat4_metrics, 'number': 4},
+            'Critical Path Validation': {'metrics': cat5_metrics, 'number': 5}
+        }
+
+        # Calculate overall score
+        all_metrics = cat1_metrics + cat2_metrics + cat3_metrics + cat4_metrics + cat5_metrics
+        for metric in all_metrics:
+            if metric['status'] == 'pass':
+                dcma_14['overall_pass_count'] += 1
+            elif metric['status'] == 'fail':
+                dcma_14['overall_fail_count'] += 1
+            elif metric['status'] == 'n/a':
+                dcma_14['overall_na_count'] += 1
+            elif metric['status'] == 'manual':
+                dcma_14['overall_manual_count'] += 1
+
+        # Overall score = pass / (total - manual)
+        scoreable_total = 14 - dcma_14['overall_manual_count'] - dcma_14['overall_na_count']
+        if scoreable_total > 0:
+            dcma_14['overall_score'] = round((dcma_14['overall_pass_count'] / scoreable_total) * 100, 1)
+        else:
+            dcma_14['overall_score'] = 0
+
+        dcma_14['overall_score_text'] = f"{dcma_14['overall_pass_count']}/{scoreable_total} PASS ({dcma_14['overall_score']:.1f}%)"
+
+        return dcma_14
 
     def _analyze_wbs_structure(self):
         """

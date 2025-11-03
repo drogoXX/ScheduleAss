@@ -148,10 +148,11 @@ try:
         if st.button("📥 Generate DOCX Report", use_container_width=True, type="primary"):
             with st.spinner("Generating DOCX report..."):
                 try:
-                    # Prepare analysis results with performance metrics
+                    # Prepare analysis results with performance metrics and DCMA 14-point
                     full_analysis = {
                         'dcma_metrics': analysis['metrics'],
                         'performance_metrics': analysis.get('performance_metrics', {}),
+                        'dcma_14_point': analysis.get('dcma_14_point', {}),
                         'issues': analysis['issues'],
                         'recommendations': analysis.get('recommendations', [])
                     }
@@ -204,14 +205,15 @@ try:
         if st.button("📥 Generate Excel Report", use_container_width=True, type="primary"):
             with st.spinner("Generating Excel report..."):
                 try:
-                    # Prepare analysis results
+                    # Prepare analysis results with DCMA 14-point
                     full_analysis = {
                         'dcma_metrics': analysis['metrics'],
                         'performance_metrics': analysis.get('performance_metrics', {}),
+                        'dcma_14_point': analysis.get('dcma_14_point', {}),
                         'issues': analysis['issues'],
                         'recommendations': analysis.get('recommendations', [])
                     }
-    
+
                     # Generate Excel
                     excel_gen = ExcelGenerator(
                         project_name=project_name,

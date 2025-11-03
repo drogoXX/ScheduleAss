@@ -122,9 +122,111 @@ The schedule contains {stats['total_activities']} activities with an overall hea
         self.document.add_paragraph()
 
     def _add_dcma_compliance(self):
-        """Add DCMA 14-Point compliance checklist"""
-        self.document.add_heading('DCMA 14-Point Compliance', level=1)
+        """Add DCMA 14-Point compliance checklist with all categories"""
+        self.document.add_heading('DCMA 14-Point Compliance Assessment', level=1)
 
+        # Get DCMA 14-point summary
+        dcma_14 = self.analysis_results.get('dcma_14_point', {})
+
+        if not dcma_14:
+            # Fallback to old format if dcma_14_point not available
+            self._add_dcma_compliance_legacy()
+            return
+
+        # Overall Score
+        overall_para = self.document.add_paragraph()
+        overall_para.add_run(f"Overall Score: {dcma_14.get('overall_score_text', 'N/A')}").bold = True
+        overall_para.add_run(f"\n{dcma_14.get('overall_pass_count', 0)} PASS  |  ")
+        overall_para.add_run(f"{dcma_14.get('overall_fail_count', 0)} FAIL  |  ")
+        overall_para.add_run(f"{dcma_14.get('overall_na_count', 0)} N/A  |  ")
+        overall_para.add_run(f"{dcma_14.get('overall_manual_count', 0)} MANUAL")
+
+        self.document.add_paragraph()
+
+        # Iterate through categories
+        categories = dcma_14.get('categories', {})
+
+        for cat_name, cat_data in categories.items():
+            # Category header
+            self.document.add_heading(f"Category {cat_data['number']}: {cat_name}", level=2)
+
+            # Calculate category pass/fail
+            cat_metrics = cat_data['metrics']
+            cat_pass = sum(1 for m in cat_metrics if m['status'] == 'pass')
+            cat_fail = sum(1 for m in cat_metrics if m['status'] == 'fail')
+            cat_total = len([m for m in cat_metrics if m['status'] not in ['n/a', 'manual', 'unknown']])
+
+            if cat_total > 0:
+                cat_score_text = f"[{cat_pass}/{cat_total}]"
+            else:
+                cat_score_text = "[N/A]"
+
+            # Add category score
+            cat_para = self.document.add_paragraph()
+            cat_para.add_run(f"Category Score: {cat_score_text}").italic = True
+            self.document.add_paragraph()
+
+            # Create table for metrics
+            table = self.document.add_table(rows=1, cols=4)
+            table.style = 'Light Grid Accent 1'
+
+            # Header row
+            hdr_cells = table.rows[0].cells
+            hdr_cells[0].text = '#'
+            hdr_cells[1].text = 'Metric'
+            hdr_cells[2].text = 'Status'
+            hdr_cells[3].text = 'Result'
+
+            # Add metrics for this category
+            for metric in cat_metrics:
+                row_cells = table.add_row().cells
+                row_cells[0].text = str(metric['number'])
+                row_cells[1].text = metric['name']
+
+                # Status with symbols
+                status = metric['status'].upper()
+                if status == 'PASS':
+                    row_cells[2].text = '✓ PASS'
+                elif status == 'FAIL':
+                    row_cells[2].text = '✗ FAIL'
+                elif status == 'N/A':
+                    row_cells[2].text = '○ N/A'
+                elif status == 'MANUAL':
+                    row_cells[2].text = '◐ MANUAL'
+                else:
+                    row_cells[2].text = '? UNKNOWN'
+
+                row_cells[3].text = metric['description']
+
+            self.document.add_paragraph()
+
+            # Add recommendations for failed metrics
+            failed_metrics = [m for m in cat_metrics if m['status'] == 'fail' and m.get('recommendation')]
+            if failed_metrics:
+                self.document.add_heading('Recommendations:', level=3)
+                for metric in failed_metrics:
+                    rec_para = self.document.add_paragraph(style='List Bullet')
+                    rec_para.add_run(f"{metric['name']}: ").bold = True
+                    rec_para.add_run(metric['recommendation'])
+
+            self.document.add_paragraph()
+
+        # Add legend
+        self.document.add_heading('Status Legend', level=2)
+        legend_para = self.document.add_paragraph()
+        legend_para.add_run('✓ PASS').bold = True
+        legend_para.add_run(' - Meets DCMA standard\n')
+        legend_para.add_run('✗ FAIL').bold = True
+        legend_para.add_run(' - Does not meet DCMA standard (action required)\n')
+        legend_para.add_run('○ N/A').bold = True
+        legend_para.add_run(' - Not applicable or data not available\n')
+        legend_para.add_run('◐ MANUAL').bold = True
+        legend_para.add_run(' - Manual verification required')
+
+        self.document.add_paragraph()
+
+    def _add_dcma_compliance_legacy(self):
+        """Legacy DCMA compliance section (fallback)"""
         dcma_metrics = self.analysis_results['dcma_metrics']
 
         # Create checklist table
