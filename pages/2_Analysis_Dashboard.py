@@ -504,14 +504,28 @@ def calculate_float_by_wbs(activities):
         return {}
 
     df = pd.DataFrame(activities)
-    if 'Total Float' not in df.columns or 'WBS Code' not in df.columns:
+
+    # Check if required columns exist
+    if 'Total Float' not in df.columns:
         return {}
 
-    # Group by WBS and get float values
-    wbs_groups = df.groupby('WBS Code')['Total Float'].apply(list).to_dict()
+    if 'WBS Code' not in df.columns:
+        return {}
+
+    # Filter out rows with NaN in WBS Code or Total Float
+    valid_df = df.dropna(subset=['WBS Code', 'Total Float'])
+
+    if len(valid_df) == 0:
+        return {}
+
+    # Group by WBS and get float values (excluding NaN)
+    wbs_groups = valid_df.groupby('WBS Code')['Total Float'].apply(list).to_dict()
 
     # Get top 10 WBS codes by activity count
-    wbs_counts = df['WBS Code'].value_counts().head(10)
+    wbs_counts = valid_df['WBS Code'].value_counts().head(10)
+
+    if len(wbs_counts) == 0:
+        return {}
 
     # Return float values for top 10 WBS codes
     float_by_wbs = {
@@ -818,7 +832,30 @@ with tab3:
 
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.info("No WBS data available for box plot")
+                # Debug information - why no data?
+                test_df = pd.DataFrame(activities)
+                if 'WBS Code' not in test_df.columns:
+                    st.warning("⚠️ WBS Code column not found in schedule data")
+                    st.info("Your P6 export may not include the WBS Code column. This is optional but recommended for detailed analysis.")
+                elif test_df['WBS Code'].isna().all():
+                    st.warning("⚠️ All WBS Code values are empty")
+                    st.info("Activities don't have WBS codes assigned. Please ensure WBS structure is defined in P6.")
+                elif 'Total Float' not in test_df.columns:
+                    st.warning("⚠️ Total Float column not found")
+                else:
+                    valid_wbs = test_df['WBS Code'].dropna()
+                    valid_float = test_df['Total Float'].dropna()
+                    st.info(f"ℹ️ Found {len(valid_wbs)} activities with WBS codes and {len(valid_float)} with Total Float values, but unable to create chart")
+
+                    # Additional debug: show sample of WBS codes
+                    if len(valid_wbs) > 0:
+                        st.write("Sample WBS Codes:", list(valid_wbs.head(5).values))
+
+                    # Check if both columns have valid data in the same rows
+                    both_valid = test_df.dropna(subset=['WBS Code', 'Total Float'])
+                    st.write(f"Activities with both WBS Code and Total Float: {len(both_valid)}")
+                    if len(both_valid) == 0:
+                        st.warning("No activities have both WBS Code AND Total Float values. Box plot requires both.")
 
         st.markdown("---")
 
