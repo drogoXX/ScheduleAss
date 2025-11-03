@@ -542,6 +542,11 @@ def calculate_float_by_wbs(activities):
             for wbs in wbs_counts.index
         }
 
+        # Ensure at least one WBS code has non-empty float values
+        has_data = any(len(floats) > 0 for floats in float_by_wbs.values())
+        if not has_data:
+            return {}
+
         return float_by_wbs
     except Exception as e:
         # Return empty dict on any error to prevent tab crash
@@ -854,6 +859,7 @@ with tab3:
                     float_values = list(float_by_wbs.values())
 
                     fig = go.Figure()
+                    traces_added = 0
 
                     for wbs, floats in zip(wbs_codes, float_values):
                         if floats:  # Only add if there are float values
@@ -863,22 +869,32 @@ with tab3:
                                 boxmean='sd',  # Show mean and standard deviation
                                 hovertemplate='<b>WBS: %{fullData.name}</b><br>Float: %{y:.1f} days<extra></extra>'
                             ))
+                            traces_added += 1
 
-                    fig.update_layout(
-                        xaxis_title="WBS Code",
-                        yaxis_title="Total Float (days)",
-                        showlegend=False,
-                        height=400,
-                        xaxis={'categoryorder': 'total descending'}
-                    )
+                    # Only display chart if traces were actually added
+                    if traces_added > 0:
+                        fig.update_layout(
+                            xaxis_title="WBS Code",
+                            yaxis_title="Total Float (days)",
+                            showlegend=False,
+                            height=400,
+                            xaxis={'categoryorder': 'total descending'}
+                        )
 
-                    # Add horizontal lines for thresholds
-                    fig.add_hline(y=0, line_dash="dash", line_color="red",
-                                 annotation_text="Critical", annotation_position="right")
-                    fig.add_hline(y=10, line_dash="dash", line_color="orange",
-                                 annotation_text="Near-Critical", annotation_position="right")
+                        # Add horizontal lines for thresholds
+                        fig.add_hline(y=0, line_dash="dash", line_color="red",
+                                     annotation_text="Critical", annotation_position="right")
+                        fig.add_hline(y=10, line_dash="dash", line_color="orange",
+                                     annotation_text="Near-Critical", annotation_position="right")
 
-                    st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        # No traces were added - show debug info
+                        st.info("⚠️ WBS codes found but no valid float data to display")
+                        test_df = pd.DataFrame(activities)
+                        st.write(f"Debug: Found {len(float_by_wbs)} WBS codes, but all have empty float value lists")
+                        both_valid = test_df.dropna(subset=['WBS Code', 'Total Float'])
+                        st.write(f"Activities with both WBS Code and Total Float: {len(both_valid)}")
                 else:
                     # Debug information - why no data?
                     test_df = pd.DataFrame(activities)
