@@ -108,7 +108,16 @@ class ExcelGenerator:
         summary_data.append(['Negative Lags', dcma.get('negative_lags', {}).get('count', 0)])
         summary_data.append(['Positive Lags %', dcma.get('positive_lags', {}).get('percentage', 0)])
         summary_data.append(['Hard Constraints %', dcma.get('hard_constraints', {}).get('percentage', 0)])
-        summary_data.append(['Missing Logic', dcma.get('missing_logic', {}).get('count', 0)])
+
+        # Missing Logic with breakdown
+        missing_logic_info = dcma.get('missing_logic', {})
+        summary_data.append(['Missing Logic (Total)', missing_logic_info.get('count', 0)])
+        summary_data.append(['  - Missing Predecessor Only', missing_logic_info.get('missing_predecessor_only_count', 0)])
+        summary_data.append(['  - Missing Successor Only', missing_logic_info.get('missing_successor_only_count', 0)])
+        summary_data.append(['  - Missing Both', missing_logic_info.get('missing_both_count', 0)])
+        summary_data.append(['DCMA Missing Predecessors', dcma.get('dcma_missing_predecessors', {}).get('count', 0)])
+        summary_data.append(['DCMA Missing Successors', dcma.get('dcma_missing_successors', {}).get('count', 0)])
+
         summary_data.append(['Long Duration Activities', dcma.get('long_durations', {}).get('count_over_20_days', 0)])
         summary_data.append(['Average Duration (days)', dcma.get('average_duration', {}).get('mean', 0)])
 
@@ -397,7 +406,23 @@ class ExcelGenerator:
 
         # Missing Logic Detail
         metrics_data.append(['MISSING LOGIC', '', '', ''])
-        missing = dcma.get('missing_logic', {}).get('activities', [])
+        missing_logic_info = dcma.get('missing_logic', {})
+        missing = missing_logic_info.get('activities', [])
+
+        # Add breakdown summary
+        metrics_data.append(['Total Missing Logic:', missing_logic_info.get('count', 0), '', ''])
+        metrics_data.append(['  - Missing Predecessor Only:', missing_logic_info.get('missing_predecessor_only_count', 0), '', ''])
+        metrics_data.append(['  - Missing Successor Only:', missing_logic_info.get('missing_successor_only_count', 0), '', ''])
+        metrics_data.append(['  - Missing Both:', missing_logic_info.get('missing_both_count', 0), '', ''])
+        metrics_data.append(['', '', '', ''])
+
+        # DCMA counts for validation
+        dcma_missing_pred = dcma.get('dcma_missing_predecessors', {}).get('count', 0)
+        dcma_missing_succ = dcma.get('dcma_missing_successors', {}).get('count', 0)
+        metrics_data.append(['DCMA Missing Predecessors:', dcma_missing_pred, '(includes activities missing both)', ''])
+        metrics_data.append(['DCMA Missing Successors:', dcma_missing_succ, '(includes activities missing both)', ''])
+        metrics_data.append(['', '', '', ''])
+
         if missing:
             metrics_data.append(['Activity ID', 'Activity Name', 'Missing Predecessor', 'Missing Successor'])
             for ml in missing:

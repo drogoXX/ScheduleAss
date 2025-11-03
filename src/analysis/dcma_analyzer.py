@@ -287,22 +287,44 @@ class DCMAAnalyzer:
     def _analyze_missing_logic(self):
         """Analyze activities with missing predecessors or successors"""
         missing_logic = []
+        missing_pred_only = []
+        missing_succ_only = []
+        missing_both = []
 
         if 'missing_logic' in self.df.columns:
             missing = self.df[self.df['missing_logic'] == True]
 
             for idx, row in missing.iterrows():
-                missing_logic.append({
+                has_missing_pred = row.get('missing_predecessor', False)
+                has_missing_succ = row.get('missing_successor', False)
+
+                activity_info = {
                     'activity_id': row['Activity ID'],
                     'activity_name': row['Activity Name'],
-                    'missing_predecessor': row.get('missing_predecessor', False),
-                    'missing_successor': row.get('missing_successor', False),
+                    'missing_predecessor': has_missing_pred,
+                    'missing_successor': has_missing_succ,
                     'status': row.get('Activity Status', 'Unknown')
-                })
+                }
+
+                missing_logic.append(activity_info)
+
+                # Categorize by type of missing logic
+                if has_missing_pred and has_missing_succ:
+                    missing_both.append(activity_info)
+                elif has_missing_pred:
+                    missing_pred_only.append(activity_info)
+                elif has_missing_succ:
+                    missing_succ_only.append(activity_info)
 
         self.metrics['missing_logic'] = {
             'count': len(missing_logic),
             'activities': missing_logic,
+            'missing_predecessor_only_count': len(missing_pred_only),
+            'missing_successor_only_count': len(missing_succ_only),
+            'missing_both_count': len(missing_both),
+            'missing_predecessor_only': missing_pred_only,
+            'missing_successor_only': missing_succ_only,
+            'missing_both': missing_both,
             'target': 0,
             'status': 'fail' if len(missing_logic) > 0 else 'pass'
         }
