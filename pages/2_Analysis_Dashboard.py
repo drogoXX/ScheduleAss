@@ -473,11 +473,95 @@ with tab2:
     else:
         st.info("No constraint data available")
 
+# ============================================================================
+# HELPER FUNCTIONS FOR FLOAT ANALYSIS - Calculate chart data on-demand
+# ============================================================================
+
+def calculate_float_distribution(activities):
+    """Calculate float distribution for histogram and donut chart"""
+    if not activities:
+        return {}
+
+    df = pd.DataFrame(activities)
+    if 'Total Float' not in df.columns:
+        return {}
+
+    float_series = df['Total Float'].dropna()
+
+    distribution = {
+        'negative': int((float_series < 0).sum()),
+        'critical': int((float_series == 0).sum()),
+        'near_critical': int(((float_series > 0) & (float_series <= 10)).sum()),
+        'low_risk': int(((float_series > 10) & (float_series <= 30)).sum()),
+        'comfortable': int((float_series > 30).sum())
+    }
+
+    return distribution
+
+def calculate_float_by_wbs(activities):
+    """Calculate float by WBS code for box plot"""
+    if not activities:
+        return {}
+
+    df = pd.DataFrame(activities)
+    if 'Total Float' not in df.columns or 'WBS Code' not in df.columns:
+        return {}
+
+    # Group by WBS and get float values
+    wbs_groups = df.groupby('WBS Code')['Total Float'].apply(list).to_dict()
+
+    # Get top 10 WBS codes by activity count
+    wbs_counts = df['WBS Code'].value_counts().head(10)
+
+    # Return float values for top 10 WBS codes
+    float_by_wbs = {
+        str(wbs): [float(f) for f in wbs_groups.get(wbs, [])]
+        for wbs in wbs_counts.index
+    }
+
+    return float_by_wbs
+
+def get_negative_float_activities(activities):
+    """Get list of activities with negative float (sorted by most negative)"""
+    if not activities:
+        return []
+
+    df = pd.DataFrame(activities)
+    if 'Total Float' not in df.columns:
+        return []
+
+    # Filter negative float
+    negative_df = df[df['Total Float'] < 0].copy()
+
+    # Sort by most negative first
+    negative_df = negative_df.sort_values('Total Float')
+
+    # Return top 20
+    result = []
+    for _, row in negative_df.head(20).iterrows():
+        result.append({
+            'activity_id': row.get('Activity ID', 'N/A'),
+            'activity_name': row.get('Activity Name', 'N/A'),
+            'total_float': float(row['Total Float']),
+            'status': row.get('Activity Status', 'N/A')
+        })
+
+    return result
+
+# ============================================================================
 # Tab 3: Float Analysis
+# ============================================================================
+
 with tab3:
     st.markdown("## Comprehensive Total Float Analysis")
 
     float_data = metrics.get('comprehensive_float', {})
+
+    # Calculate chart data on-demand from activities (not stored in metrics)
+    activities = schedule['schedule_data'].get('activities', [])
+    distribution = calculate_float_distribution(activities)
+    float_by_wbs = calculate_float_by_wbs(activities)
+    negative_activities = get_negative_float_activities(activities)
 
     if not float_data or 'error' in float_data:
         if 'error' in float_data:
@@ -593,7 +677,7 @@ with tab3:
             # Chart 1: Float Distribution Histogram
             st.markdown("#### Float Distribution Histogram")
 
-            distribution = float_data.get('distribution', {})
+            # distribution is calculated at top of tab from activities
             if distribution:
                 # Prepare data for histogram
                 categories = ['Negative\n(<0)', 'Critical\n(0)', 'Near-Critical\n(1-10)', 'Low Risk\n(11-30)', 'Comfortable\n(>30)']
@@ -701,7 +785,7 @@ with tab3:
             # Chart 3: Float Box Plot by WBS Code
             st.markdown("#### Float Distribution by WBS Code")
 
-            float_by_wbs = float_data.get('float_by_wbs', {})
+            # float_by_wbs is calculated at top of tab from activities
             if float_by_wbs and len(float_by_wbs) > 0:
                 # Prepare data for box plot
                 wbs_codes = list(float_by_wbs.keys())
@@ -742,7 +826,7 @@ with tab3:
         if negative_count > 0:
             st.markdown("#### 🔴 Activities with Negative Float (Behind Schedule)")
 
-            negative_activities = negative_data.get('activities', [])
+            # negative_activities is calculated at top of tab from activities
             if negative_activities:
                 # Limit to top 20
                 top_20 = negative_activities[:20]
