@@ -58,8 +58,23 @@ selected_schedule_label = st.selectbox(
 )
 
 selected_schedule_id = schedule_options[selected_schedule_label]
-schedule = db.get_schedule_by_id(selected_schedule_id)
-analysis = db.get_analysis_by_schedule(selected_schedule_id)
+
+try:
+    schedule = db.get_schedule_by_id(selected_schedule_id)
+    analysis = db.get_analysis_by_schedule(selected_schedule_id)
+
+    # Debug logging
+    if analysis:
+        st.sidebar.success(f"✅ Analysis loaded: {len(str(analysis))} chars")
+    else:
+        st.sidebar.warning("⚠️ No analysis found")
+
+except Exception as e:
+    st.error(f"❌ CRITICAL ERROR loading data:")
+    st.code(str(e))
+    import traceback
+    st.code(traceback.format_exc())
+    st.stop()
 
 if not analysis:
     display_no_data_message("No analysis results available for this schedule.")
@@ -71,8 +86,10 @@ project_name = project['project_name'] if project else "Unknown Project"
 
 st.markdown("---")
 
-# Report preview
-st.markdown("### Report Preview")
+# Wrap everything in try-except to catch rendering errors
+try:
+    # Report preview
+    st.markdown("### Report Preview")
 
 col1, col2 = st.columns([1, 1])
 
@@ -339,4 +356,50 @@ with st.expander("❓ Report Help"):
     - Check browser download settings
     - Disable popup blockers
     - Try different browser
+    """)
+
+except Exception as e:
+    st.error("## ❌ CRITICAL ERROR - Page Rendering Failed")
+    st.error(f"**Error Type:** {type(e).__name__}")
+    st.error(f"**Error Message:** {str(e)}")
+
+    st.markdown("### 🔍 Debug Information")
+    st.write("**Analysis Data Check:**")
+    st.write(f"- Analysis exists: {analysis is not None}")
+    if analysis:
+        st.write(f"- Analysis keys: {list(analysis.keys())}")
+        st.write(f"- Metrics keys: {list(analysis.get('metrics', {}).keys())}")
+        if 'comprehensive_float' in analysis.get('metrics', {}):
+            cf = analysis['metrics']['comprehensive_float']
+            st.write(f"- comprehensive_float keys: {list(cf.keys())}")
+
+            # Check for problematic data types
+            import numpy as np
+            def check_types(obj, path=''):
+                issues = []
+                if isinstance(obj, dict):
+                    for k, v in obj.items():
+                        issues.extend(check_types(v, f'{path}.{k}'))
+                elif isinstance(obj, list) and len(obj) > 0:
+                    issues.extend(check_types(obj[0], f'{path}[0]'))
+                elif isinstance(obj, (np.integer, np.floating)):
+                    issues.append(f'{path}: {type(obj).__name__}')
+                return issues
+
+            type_issues = check_types(cf, 'comprehensive_float')
+            if type_issues:
+                st.warning(f"⚠️ Found {len(type_issues)} numpy types (may cause serialization issues)")
+                for issue in type_issues[:10]:
+                    st.code(issue)
+
+    st.markdown("### 📋 Full Traceback")
+    import traceback
+    st.code(traceback.format_exc())
+
+    st.markdown("### 💡 Possible Solutions")
+    st.info("""
+    1. **Re-analyze the schedule** - Go to Upload Schedule and click "Analyze Schedule" again
+    2. **Clear browser cache** - Refresh with Ctrl+Shift+R or Cmd+Shift+R
+    3. **Try a different browser** - Sometimes browser state causes issues
+    4. **Contact support** - Share the error details above
     """)

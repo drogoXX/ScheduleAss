@@ -630,33 +630,31 @@ class DCMAAnalyzer:
                 for wbs in wbs_counts.index
             }
 
-        # Store comprehensive metrics
+        # Store comprehensive metrics - ONLY ESSENTIAL KPIs (no chart data)
+        # Chart data will be calculated on-demand in the dashboard from activities
         self.metrics['comprehensive_float'] = {
             # KPI Summary
             'total_activities': total_activities,
             'project_duration': project_duration,
 
-            # Critical Path (KPI 1)
+            # Critical Path (KPI 1) - Numbers only
             'critical': {
                 'count': int(critical_count),
                 'percentage': round(critical_pct, 2),
-                'activities': critical_activities,
                 'status': 'warning' if critical_pct > 15 else 'pass',
                 'target': '≤15%'
             },
 
-            # Near-Critical (KPI 2)
+            # Near-Critical (KPI 2) - Numbers only
             'near_critical': {
                 'count': int(near_critical_count),
-                'percentage': round(near_critical_pct, 2),
-                'activities': near_critical_activities
+                'percentage': round(near_critical_pct, 2)
             },
 
-            # Negative Float (KPI 3)
+            # Negative Float (KPI 3) - Numbers only
             'negative_float': {
                 'count': int(negative_count),
                 'percentage': round(negative_pct, 2),
-                'activities': negative_activities,
                 'status': 'fail' if negative_count > 0 else 'pass',
                 'severity': 'high' if negative_count > 0 else 'none'
             },
@@ -679,21 +677,20 @@ class DCMAAnalyzer:
                 'max': round(float(float_series.max()), 2)
             },
 
-            # Excessive Float (KPI 6)
+            # Excessive Float (KPI 6) - Numbers only
             'excessive_float': {
                 'count': int(excessive_count),
                 'percentage': round(excessive_pct, 2),
                 'threshold': round(excessive_threshold, 2),
-                'activities': excessive_activities,
                 'status': 'warning' if excessive_count > 0 else 'pass'
             },
 
             # Most Negative (KPI 7)
-            'most_negative': round(most_negative, 2),
+            'most_negative': round(most_negative, 2)
 
-            # Distribution for charts
-            'distribution': float_distribution,
-            'float_by_wbs': float_by_wbs
+            # NOTE: Chart data (distribution, float_by_wbs, activity lists) are NOT stored
+            # They will be calculated on-demand in the dashboard from schedule_data['activities']
+            # This keeps metrics small, fast to serialize, and prevents database bloat
         }
 
         # Create issues based on float analysis
