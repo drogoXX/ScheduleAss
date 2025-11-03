@@ -38,6 +38,7 @@ class DOCXGenerator:
         self._add_executive_summary()
         self._add_dcma_compliance()
         self._add_key_metrics()
+        self._add_wbs_analysis()
         self._add_issues_summary()
         self._add_recommendations()
         self._add_appendix()
@@ -178,6 +179,124 @@ The schedule contains {stats['total_activities']} activities with an overall hea
             f"Value: {bei.get('value', 0):.3f} (Target: ≥0.95)\n"
             f"Status: {bei.get('status', 'unknown').upper()}\n"
             f"Completed: {bei.get('completed', 0)} / Planned: {bei.get('planned', 0)}"
+        )
+
+        self.document.add_paragraph()
+
+    def _add_wbs_analysis(self):
+        """Add WBS (Work Breakdown Structure) analysis"""
+        # Check if WBS analysis is available
+        wbs_analysis = self.analysis_results['dcma_metrics'].get('wbs_analysis', {})
+
+        if not wbs_analysis.get('available'):
+            # Skip this section if WBS data is not available
+            return
+
+        self.document.add_heading('WBS Analysis', level=1)
+
+        # Overview
+        self.document.add_paragraph(
+            f"Total Activities: {wbs_analysis.get('total_activities', 0)}\n"
+            f"Activities with WBS Codes: {wbs_analysis.get('activities_with_wbs', 0)}\n"
+            f"Average WBS Depth: {wbs_analysis.get('avg_depth', 0):.1f}\n"
+            f"Maximum WBS Depth: {wbs_analysis.get('max_depth', 0)}"
+        )
+
+        self.document.add_paragraph()
+
+        # WBS Level 1 (Phases) Analysis
+        level1 = wbs_analysis.get('level_1_phases', {})
+        if level1:
+            self.document.add_heading('WBS Level 1 - Phases', level=2)
+
+            # Create table
+            table = self.document.add_table(rows=1, cols=7)
+            table.style = 'Light Grid Accent 1'
+
+            # Header
+            hdr_cells = table.rows[0].cells
+            hdr_cells[0].text = 'Phase'
+            hdr_cells[1].text = 'Activities'
+            hdr_cells[2].text = 'Avg Float'
+            hdr_cells[3].text = 'Critical'
+            hdr_cells[4].text = 'Negative'
+            hdr_cells[5].text = 'Health Score'
+            hdr_cells[6].text = 'Rating'
+
+            # Add phase data
+            for wbs_code, stats in sorted(level1.items()):
+                row_cells = table.add_row().cells
+                health_score = stats.get('health_score', {})
+
+                row_cells[0].text = f"Phase {wbs_code}"
+                row_cells[1].text = str(stats.get('activity_count', 0))
+                row_cells[2].text = f"{stats.get('avg_float', 0):.1f}"
+                row_cells[3].text = str(stats.get('critical_count', 0))
+                row_cells[4].text = str(stats.get('negative_float_count', 0))
+                row_cells[5].text = f"{health_score.get('score', 0):.0f}/100"
+                row_cells[6].text = health_score.get('rating', 'Unknown')
+
+            self.document.add_paragraph()
+
+        # WBS Level 2 (Areas) Analysis
+        level2 = wbs_analysis.get('level_2_areas', {})
+        if level2:
+            self.document.add_heading('WBS Level 2 - Areas', level=2)
+
+            # Create table
+            table = self.document.add_table(rows=1, cols=7)
+            table.style = 'Light Grid Accent 1'
+
+            # Header
+            hdr_cells = table.rows[0].cells
+            hdr_cells[0].text = 'Area'
+            hdr_cells[1].text = 'Activities'
+            hdr_cells[2].text = 'Avg Float'
+            hdr_cells[3].text = 'Critical'
+            hdr_cells[4].text = '% Critical'
+            hdr_cells[5].text = 'Health Score'
+            hdr_cells[6].text = 'Rating'
+
+            # Add area data (sorted by health score to show problem areas first)
+            areas_with_scores = []
+            for wbs_code, stats in level2.items():
+                health_score = stats.get('health_score', {})
+                areas_with_scores.append((wbs_code, stats, health_score.get('score', 0)))
+
+            areas_with_scores.sort(key=lambda x: x[2])  # Sort by health score ascending
+
+            for wbs_code, stats, _ in areas_with_scores:
+                row_cells = table.add_row().cells
+                health_score = stats.get('health_score', {})
+
+                activity_count = stats.get('activity_count', 0)
+                critical_count = stats.get('critical_count', 0)
+                pct_critical = (critical_count / activity_count * 100) if activity_count > 0 else 0
+
+                row_cells[0].text = f"Area {wbs_code}"
+                row_cells[1].text = str(activity_count)
+                row_cells[2].text = f"{stats.get('avg_float', 0):.1f}"
+                row_cells[3].text = str(critical_count)
+                row_cells[4].text = f"{pct_critical:.0f}%"
+                row_cells[5].text = f"{health_score.get('score', 0):.0f}/100"
+                row_cells[6].text = health_score.get('rating', 'Unknown')
+
+            self.document.add_paragraph()
+
+        # WBS Health Score Legend
+        self.document.add_heading('Health Score Interpretation', level=2)
+        self.document.add_paragraph(
+            "Health scores are calculated based on:\n"
+            "• Critical Path % (40 points): Lower is better\n"
+            "• Average Float (30 points): Higher is better\n"
+            "• Negative Float % (20 points): Lower is better\n"
+            "• Activity Distribution (10 points): Balanced is better\n\n"
+            "Rating Scale:\n"
+            "• Excellent (80-100): Well-balanced, low risk\n"
+            "• Good (65-79): Acceptable performance\n"
+            "• Fair (50-64): Some concerns\n"
+            "• Poor (35-49): Significant issues\n"
+            "• Critical (0-34): Immediate attention required"
         )
 
         self.document.add_paragraph()

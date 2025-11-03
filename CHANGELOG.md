@@ -1,5 +1,101 @@
 # Changelog
 
+## [1.0.9] - 2025-11-03
+
+### Added - WBS Advanced Visualizations and Health Scores
+
+**Feature Request:** Complete Phase 3 of WBS implementation - Advanced visualizations (treemap, sunburst), health score calculations, and report integration
+
+**Implementation:**
+
+#### Dashboard Enhancements (`pages/2_Analysis_Dashboard.py`)
+
+**Advanced WBS Hierarchy Visualizations:**
+- **Treemap Chart:** Interactive hierarchical visualization showing WBS structure with rectangles sized by activity count and colored by health score (0-100 scale with RdYlGn colormap)
+- **Sunburst Chart:** Radial hierarchical chart displaying project → phase → area breakdown with health score coloring
+- **Health Score Cards:** Visual metric cards for top 5 phases and areas showing scores, ratings, and color-coded status indicators
+- **Enhanced Tables:** Added Health Score and Rating columns to both Level 1 (Phases) and Level 2 (Areas) detail tables
+
+**WBS Health Score Algorithm (`src/analysis/dcma_analyzer.py`):**
+
+New method `_calculate_wbs_health_score()` implementing 4-component scoring system (0-100 points):
+
+**Component 1: Critical Path Percentage (40 points)**
+- 100% score if 0% critical activities (no constraints)
+- Scaled scoring: 0% critical = 40pts, 5% = 35pts, 15% = 30pts, 25% = 20pts, 40% = 10pts, >40% = 0pts
+- Lower % critical indicates better schedule flexibility
+
+**Component 2: Average Float (30 points)**
+- 100% score if ≥20 days average float
+- Scaled scoring: ≥20 days = 30pts, ≥15 = 25pts, ≥10 = 20pts, ≥5 = 15pts, >0 = 10pts, 0 = 0pts
+- Higher float provides more schedule buffer and flexibility
+
+**Component 3: Negative Float Percentage (20 points)**
+- 100% score if 0% activities behind schedule
+- Scaled scoring: 0% = 20pts, ≤5% = 15pts, ≤10% = 10pts, ≤20% = 5pts, >20% = 0pts
+- Lower negative float % means fewer recovery actions needed
+
+**Component 4: Activity Distribution (10 points)**
+- Bonus points for balanced WBS structure
+- ≥10 activities = 10pts, ≥5 = 7pts, ≥3 = 5pts, <3 = 3pts
+- Ensures WBS areas have sufficient granularity
+
+**Rating Scale:**
+- **Excellent (80-100):** Well-balanced, low risk, green indicator
+- **Good (65-79):** Acceptable performance, light green
+- **Fair (50-64):** Some concerns, yellow
+- **Poor (35-49):** Significant issues, orange
+- **Critical (0-34):** Immediate attention required, red
+
+**Integration Points:**
+- Health scores calculated for all WBS Level 1 (Phases) and Level 2 (Areas)
+- Stored in `wbs_analysis` metrics as part of `level_1_phases` and `level_2_areas` dictionaries
+- Each WBS entry includes `health_score` dict with `score`, `rating`, `color`, and `components` breakdown
+
+#### DOCX Report Integration (`src/reports/docx_generator.py`)
+
+**New Method:** `_add_wbs_analysis()`
+- Added to report generation flow between Key Metrics and Issues Summary
+- **WBS Overview Section:** Total activities, WBS coverage, depth statistics
+- **Level 1 Table:** 7-column table showing Phase, Activities, Avg Float, Critical count, Negative Float, Health Score, Rating
+- **Level 2 Table:** 7-column table for Areas with additional % Critical column
+- **Health Score Interpretation Section:** Explains scoring methodology and rating scale
+- Gracefully handles missing WBS data (skips section if unavailable)
+
+#### Excel Report Integration (`src/reports/excel_generator.py`)
+
+**New Method:** `_create_wbs_sheet()`
+- Creates dedicated "WBS Analysis" worksheet
+- **WBS Overview:** Key statistics (total activities, coverage, depth)
+- **Level 1 Data:** 8-column breakdown of all phases with health scores
+- **Level 2 Data:** 8-column breakdown of all areas, sorted by health score (worst first)
+- **Health Score Legend:** 5-tier rating scale with meanings
+- **Scoring Components Table:** Breakdown of 4 components with max points and descriptions
+- Handles missing WBS data with informative message
+
+**Testing Results:**
+
+Tested with actual P6 schedule data (28 activities, 5 phases, 4 areas):
+- **Phase 0:** 23/100 Critical (100% critical, 0 float) - Correctly identified as high risk
+- **Phase 1:** 40/100 Poor (83% critical, 0.6 days float) - Significant issues flagged
+- **Phase 4:** 85/100 Excellent (0% critical, 11.7 days float) - Healthy phase identified
+- **Area 1:** 40/100 Poor (81.8% critical) - Problem area highlighted
+- Visualizations render correctly with proper color gradients
+- Reports generate successfully with WBS data included
+
+**Key Features:**
+- Objective, data-driven health scoring eliminates subjective assessment
+- Visual hierarchy charts make complex WBS structures instantly understandable
+- Worst-first sorting in reports highlights areas needing immediate attention
+- Comprehensive documentation in reports educates stakeholders on methodology
+- Consistent health score calculation across dashboard and reports
+
+**Benefits:**
+- Project managers can quickly identify high-risk WBS areas
+- Executives get clear visual summary of schedule health by work area
+- Teams can prioritize recovery efforts based on health scores
+- Reports provide audit trail of WBS-level schedule quality
+
 ## [1.0.8] - 2025-11-02
 
 ### Added - Comprehensive Total Float Analysis

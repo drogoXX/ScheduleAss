@@ -895,11 +895,17 @@ class DCMAAnalyzer:
         # WBS Level 1 (Phase) Analysis
         if 'wbs_level_1' in self.df.columns:
             level1_stats = self._calculate_wbs_level_stats(1)
+            # Add health scores to level 1
+            for wbs_code, stats in level1_stats.items():
+                stats['health_score'] = self._calculate_wbs_health_score(stats)
             wbs_metrics['level_1_phases'] = level1_stats
 
         # WBS Level 2 (Area) Analysis
         if 'wbs_level_2' in self.df.columns:
             level2_stats = self._calculate_wbs_level_stats(2)
+            # Add health scores to level 2
+            for wbs_code, stats in level2_stats.items():
+                stats['health_score'] = self._calculate_wbs_health_score(stats)
             wbs_metrics['level_2_areas'] = level2_stats
 
         # Store metrics
@@ -959,3 +965,118 @@ class DCMAAnalyzer:
             stats[str(wbs_code)] = wbs_stats
 
         return stats
+
+    def _calculate_wbs_health_score(self, wbs_stats: Dict) -> Dict:
+        """
+        Calculate health score for a WBS area
+
+        Health Score Algorithm (0-100):
+        - Critical % (40 points): 100% if 0% critical, 0% if >30% critical
+        - Average Float (30 points): 100% if >20 days, 0% if 0 days
+        - Negative Float (20 points): 100% if 0, 0% if >10% negative
+        - Activity Count (10 points): Bonus for balanced distribution
+
+        Args:
+            wbs_stats: WBS statistics dictionary
+
+        Returns:
+            Dictionary with score, rating, and color
+        """
+        activity_count = wbs_stats.get('activity_count', 0)
+
+        if activity_count == 0:
+            return {'score': 0, 'rating': 'No Data', 'color': 'gray'}
+
+        # Component 1: Critical % (40 points) - Lower is better
+        critical_count = wbs_stats.get('critical_count', 0)
+        critical_pct = (critical_count / activity_count * 100) if activity_count > 0 else 0
+
+        if critical_pct == 0:
+            critical_score = 40
+        elif critical_pct <= 5:
+            critical_score = 35
+        elif critical_pct <= 15:
+            critical_score = 30
+        elif critical_pct <= 25:
+            critical_score = 20
+        elif critical_pct <= 40:
+            critical_score = 10
+        else:
+            critical_score = 0
+
+        # Component 2: Average Float (30 points) - Higher is better
+        avg_float = wbs_stats.get('avg_float', 0)
+
+        if avg_float >= 20:
+            float_score = 30
+        elif avg_float >= 15:
+            float_score = 25
+        elif avg_float >= 10:
+            float_score = 20
+        elif avg_float >= 5:
+            float_score = 15
+        elif avg_float > 0:
+            float_score = 10
+        else:
+            float_score = 0
+
+        # Component 3: Negative Float (20 points) - Lower is better
+        negative_count = wbs_stats.get('negative_float_count', 0)
+        negative_pct = (negative_count / activity_count * 100) if activity_count > 0 else 0
+
+        if negative_pct == 0:
+            negative_score = 20
+        elif negative_pct <= 5:
+            negative_score = 15
+        elif negative_pct <= 10:
+            negative_score = 10
+        elif negative_pct <= 20:
+            negative_score = 5
+        else:
+            negative_score = 0
+
+        # Component 4: Activity Distribution (10 points)
+        # Bonus for having enough activities to be meaningful
+        if activity_count >= 10:
+            distribution_score = 10
+        elif activity_count >= 5:
+            distribution_score = 7
+        elif activity_count >= 3:
+            distribution_score = 5
+        else:
+            distribution_score = 3
+
+        # Calculate total score
+        total_score = critical_score + float_score + negative_score + distribution_score
+
+        # Determine rating and color
+        if total_score >= 80:
+            rating = 'Excellent'
+            color = '#27ae60'  # Green
+        elif total_score >= 65:
+            rating = 'Good'
+            color = '#2ecc71'  # Light green
+        elif total_score >= 50:
+            rating = 'Fair'
+            color = '#f39c12'  # Orange
+        elif total_score >= 35:
+            rating = 'Poor'
+            color = '#e67e22'  # Dark orange
+        else:
+            rating = 'Critical'
+            color = '#e74c3c'  # Red
+
+        return {
+            'score': round(total_score, 1),
+            'rating': rating,
+            'color': color,
+            'components': {
+                'critical_pct': round(critical_pct, 1),
+                'critical_score': critical_score,
+                'avg_float': round(avg_float, 1),
+                'float_score': float_score,
+                'negative_pct': round(negative_pct, 1),
+                'negative_score': negative_score,
+                'distribution_score': distribution_score
+            }
+        }
