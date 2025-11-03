@@ -1134,12 +1134,13 @@ class DCMAAnalyzer:
         """
         DCMA #4: Missing Logic (High Float >44 days)
         Target: <5% of activities with float >44 days
+        Exclude: Milestones (0 duration), completed activities
         """
         if 'Total Float' not in self.df.columns:
             self.metrics['dcma_high_float'] = {
                 'count': 0,
                 'percentage': 0,
-                'total_activities': len(self.df),
+                'total_analyzed': 0,
                 'activities': [],
                 'threshold': 44,
                 'target': 5.0,
@@ -1148,25 +1149,38 @@ class DCMAAnalyzer:
             }
             return
 
-        high_float_activities = []
-        float_series = self.df['Total Float'].dropna()
+        # Filter: incomplete activities, non-milestones
+        incomplete_df = self.df.copy()
+        if 'Activity Status' in self.df.columns:
+            incomplete_df = incomplete_df[incomplete_df['Activity Status'] != 'Completed']
 
-        for idx, row in self.df.iterrows():
+        # Exclude milestones
+        if 'Activity Type' in incomplete_df.columns:
+            incomplete_df = incomplete_df[~incomplete_df['Activity Type'].str.contains('Milestone', case=False, na=False)]
+
+        # Also exclude by duration if Activity Type not available
+        if 'At Completion Duration' in incomplete_df.columns:
+            incomplete_df = incomplete_df[incomplete_df['At Completion Duration'] != 0]
+
+        high_float_activities = []
+
+        for idx, row in incomplete_df.iterrows():
             total_float = row.get('Total Float')
             if pd.notna(total_float) and total_float > 44:
                 high_float_activities.append({
                     'activity_id': row['Activity ID'],
                     'activity_name': row['Activity Name'],
-                    'total_float': float(total_float)
+                    'total_float': float(total_float),
+                    'status': row.get('Activity Status', 'Unknown')
                 })
 
-        total_activities = len(float_series)
-        percentage = (len(high_float_activities) / total_activities * 100) if total_activities > 0 else 0
+        total_analyzed = len(incomplete_df)
+        percentage = (len(high_float_activities) / total_analyzed * 100) if total_analyzed > 0 else 0
 
         self.metrics['dcma_high_float'] = {
             'count': len(high_float_activities),
             'percentage': round(percentage, 2),
-            'total_activities': total_activities,
+            'total_analyzed': total_analyzed,
             'activities': high_float_activities,
             'threshold': 44,
             'target': 5.0,
@@ -1179,7 +1193,7 @@ class DCMAAnalyzer:
                 'category': 'Logic Quality',
                 'severity': 'medium',
                 'title': f'DCMA: High Float (>44 days): {percentage:.1f}%',
-                'description': f'Found {len(high_float_activities)} activities with float >44 days ({percentage:.1f}% of activities). DCMA target is <5%. High float may indicate missing logic.',
+                'description': f'Found {len(high_float_activities)} incomplete activities with float >44 days ({percentage:.1f}% of {total_analyzed} incomplete, non-milestone activities). DCMA target is <5%. High float may indicate missing logic.',
                 'count': len(high_float_activities),
                 'recommendation': 'Review activities with excessive float for missing predecessors/successors. Add logic relationships to reduce float.',
                 'affected_activities': [a['activity_id'] for a in high_float_activities[:20]]
@@ -1342,7 +1356,7 @@ class DCMAAnalyzer:
                 'status': self.metrics.get('dcma_high_float', {}).get('status', 'unknown'),
                 'result': self.metrics.get('dcma_high_float', {}).get('percentage', 0),
                 'target': '<5%',
-                'description': f"{self.metrics.get('dcma_high_float', {}).get('percentage', 0):.1f}% (Target: <5%)",
+                'description': f"{self.metrics.get('dcma_high_float', {}).get('percentage', 0):.1f}% of incomplete activities (Target: <5%, excludes completed & milestones)",
                 'recommendation': 'Add logic relationships to activities with excessive float' if self.metrics.get('dcma_high_float', {}).get('status') == 'fail' else None
             },
             {
