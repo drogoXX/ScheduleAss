@@ -4,13 +4,14 @@ Allows admins to upload and parse P6 schedule CSV files
 """
 
 import streamlit as st
-from src.services import get_auth, get_database
+from src.services import get_auth, get_database, invalidate_schedule_caches
 from src.parsers.schedule_parser import ScheduleParser
 from src.analysis.dcma_analyzer import DCMAAnalyzer
 from src.analysis.metrics_calculator import MetricsCalculator
 from src.analysis.recommendations import RecommendationsEngine
 from src.config import settings
 from src.logging_config import get_logger
+from src.ui.theme import app_header, fmt_count, fmt_score, inject_css
 from src.utils.helpers import (
     display_success_message, display_error_message,
     display_warning_message, init_session_state, report_error
@@ -19,6 +20,7 @@ from src.utils.helpers import (
 logger = get_logger("upload")
 
 st.set_page_config(page_title="Upload Schedule", page_icon="📤", layout="wide")
+inject_css("Upload Schedule")
 
 # Initialize
 init_session_state()
@@ -29,19 +31,16 @@ auth = get_auth(db)
 auth.require_auth()
 auth.require_admin()
 
-st.title("📤 Upload Schedule")
-st.markdown("Upload and analyze P6 schedule CSV files")
+app_header("📤 Upload Schedule", "Upload and analyze P6 schedule CSV files")
 
 # User info in sidebar
 with st.sidebar:
-    st.markdown("---")
+    st.divider()
     user = auth.get_current_user()
     if user:
         st.markdown(f"**User:** {user['username']}")
         st.markdown(f"**Role:** {user['role'].capitalize()}")
-    st.markdown("---")
-
-st.markdown("---")
+    st.divider()
 
 # Project selection/creation
 st.subheader("1. Select or Create Project")
@@ -253,6 +252,10 @@ if analyze_button:
                 },
             )
 
+            # The cached schedule/analysis readers must not serve results from
+            # before this upload.
+            invalidate_schedule_caches()
+
             # Store in session state
             st.session_state.current_schedule = schedule
             st.session_state.current_analysis = analysis
@@ -265,38 +268,41 @@ if analyze_button:
             st.balloons()
             display_success_message(
                 f"Schedule uploaded and analyzed successfully! "
-                f"Health Score: {performance_metrics['health_score']['score']:.1f}/100"
+                f"Health Score: {fmt_score(performance_metrics['health_score']['score'])}"
             )
 
             # Display summary
-            st.markdown("---")
+            st.divider()
             st.subheader("📊 Analysis Summary")
 
             col1, col2, col3, col4 = st.columns(4)
 
             with col1:
+                # delta_color="off": the rating is a label, not a change, so it
+                # must not be coloured green with an up-arrow.
                 st.metric(
                     "Health Score",
-                    f"{performance_metrics['health_score']['score']:.1f}/100",
-                    delta=performance_metrics['health_score']['rating']
+                    fmt_score(performance_metrics['health_score']['score']),
+                    delta=performance_metrics['health_score']['rating'],
+                    delta_color="off"
                 )
 
             with col2:
                 st.metric(
                     "Total Activities",
-                    schedule_data['total_activities']
+                    fmt_count(schedule_data['total_activities'])
                 )
 
             with col3:
                 st.metric(
                     "Issues Found",
-                    len(dcma_results['issues'])
+                    fmt_count(len(dcma_results['issues']))
                 )
 
             with col4:
                 st.metric(
                     "Recommendations",
-                    len(recommendations)
+                    fmt_count(len(recommendations))
                 )
 
             # Next steps

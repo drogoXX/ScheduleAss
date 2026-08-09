@@ -29,372 +29,55 @@ from src.analysis import health_score  # noqa: E402
 # ---------------------------------------------------------------------------
 # Design system
 # ---------------------------------------------------------------------------
+# Layout, typography and colour live in src/reports/docx_styles.py so this tool
+# and the analysis report (src/reports/docx_generator.py) render from one
+# definition and cannot drift apart.
+from src.reports.docx_styles import (  # noqa: E402
+    BODY_FONT,
+    GRAY_DARK,
+    GRAY_MEDIUM,
+    PRIMARY,
+    add_body,
+    add_bullets,
+    add_note,
+    add_table,
+    add_toc,
+    configure_headers_footers,
+    configure_styles,
+)
+from src.reports.docx_styles import add_cover_page as _add_cover_page  # noqa: E402
+
+#: Retained so the content builders below keep reading naturally; the values
+#: now come from the shared palette rather than being redeclared here.
 COLORS = {
-    "primary": RGBColor(0x00, 0x4B, 0x87),
-    "white": RGBColor(0xFF, 0xFF, 0xFF),
-    "black": RGBColor(0x21, 0x21, 0x21),
-    "gray_dark": RGBColor(0x42, 0x42, 0x42),
-    "gray_medium": RGBColor(0x75, 0x75, 0x75),
+    "primary": PRIMARY,
+    "gray_dark": GRAY_DARK,
+    "gray_medium": GRAY_MEDIUM,
 }
-
-HEADER_FILL = "004B87"
-ALT_ROW_FILL = "F5F5F5"
-CRITICAL_FILL = "FADBD8"
-NOTE_FILL = "EEF3F8"
-
-PAGE_WIDTH_A4 = Cm(21.0)
-PAGE_HEIGHT_A4 = Cm(29.7)
-MARGIN_LEFT = Cm(2.5)
-MARGIN_RIGHT = Cm(2.0)
-
-BODY_FONT = "Arial"
-
-
-# ---------------------------------------------------------------------------
-# Low-level helpers
-# ---------------------------------------------------------------------------
-def _style_cell(cell, bold=False, size=Pt(9), color=None, align=None):
-    for paragraph in cell.paragraphs:
-        paragraph.paragraph_format.space_before = Pt(2)
-        paragraph.paragraph_format.space_after = Pt(2)
-        if align is not None:
-            paragraph.alignment = align
-        for run in paragraph.runs:
-            run.font.name = BODY_FONT
-            run.font.size = size
-            run.font.bold = bold
-            run.font.color.rgb = color or COLORS["gray_dark"]
-
-
-def _set_cell_shading(cell, hex_color):
-    tc_pr = cell._tc.get_or_add_tcPr()
-    shading = tc_pr.makeelement(
-        qn("w:shd"), {qn("w:fill"): hex_color, qn("w:val"): "clear"}
-    )
-    tc_pr.append(shading)
-
-
-def _remove_table_borders(table):
-    tbl_pr = table._tbl.tblPr
-    borders = tbl_pr.makeelement(qn("w:tblBorders"), {})
-    for name in ("top", "left", "bottom", "right", "insideH", "insideV"):
-        borders.append(borders.makeelement(
-            qn(f"w:{name}"),
-            {qn("w:val"): "none", qn("w:sz"): "0",
-             qn("w:space"): "0", qn("w:color"): "auto"},
-        ))
-    tbl_pr.append(borders)
-
-
-def _add_field(paragraph, instruction):
-    """Insert a Word field code (used for TOC and page numbers)."""
-    run = paragraph.add_run()
-    run._r.append(run._r.makeelement(
-        qn("w:fldChar"), {qn("w:fldCharType"): "begin"}))
-
-    run2 = paragraph.add_run()
-    instr = run2._r.makeelement(qn("w:instrText"), {})
-    instr.text = instruction
-    run2._r.append(instr)
-
-    run3 = paragraph.add_run()
-    run3._r.append(run3._r.makeelement(
-        qn("w:fldChar"), {qn("w:fldCharType"): "end"}))
-    return run3
-
-
-def _bottom_border(target, color, size="8"):
-    """
-    Add a bottom rule to a paragraph or to a paragraph style.
-
-    A Paragraph exposes its XML as ``._p``; a ParagraphStyle as ``.element``.
-    """
-    element = getattr(target, "_p", None) or target.element
-    p_pr = element.get_or_add_pPr()
-    borders = p_pr.makeelement(qn("w:pBdr"), {})
-    borders.append(borders.makeelement(
-        qn("w:bottom"),
-        {qn("w:val"): "single", qn("w:sz"): size,
-         qn("w:space"): "4", qn("w:color"): color},
-    ))
-    p_pr.append(borders)
-
-
-# ---------------------------------------------------------------------------
-# Document scaffolding
-# ---------------------------------------------------------------------------
-def configure_styles(doc):
-    styles = doc.styles
-
-    normal = styles["Normal"]
-    normal.font.name = BODY_FONT
-    normal.font.size = Pt(10)
-    normal.font.color.rgb = COLORS["gray_dark"]
-    normal.paragraph_format.space_after = Pt(6)
-    normal.paragraph_format.line_spacing = 1.15
-
-    h1 = styles["Heading 1"]
-    h1.font.name = BODY_FONT
-    h1.font.size = Pt(18)
-    h1.font.bold = True
-    h1.font.color.rgb = COLORS["primary"]
-    h1.paragraph_format.space_before = Pt(24)
-    h1.paragraph_format.space_after = Pt(12)
-    h1.paragraph_format.keep_with_next = True
-    _bottom_border(h1, "004B87")
-
-    h2 = styles["Heading 2"]
-    h2.font.name = BODY_FONT
-    h2.font.size = Pt(14)
-    h2.font.bold = True
-    h2.font.color.rgb = COLORS["primary"]
-    h2.paragraph_format.space_before = Pt(18)
-    h2.paragraph_format.space_after = Pt(8)
-    h2.paragraph_format.keep_with_next = True
-
-    h3 = styles["Heading 3"]
-    h3.font.name = BODY_FONT
-    h3.font.size = Pt(12)
-    h3.font.bold = True
-    h3.font.color.rgb = COLORS["gray_dark"]
-    h3.paragraph_format.space_before = Pt(12)
-    h3.paragraph_format.space_after = Pt(6)
-    h3.paragraph_format.keep_with_next = True
-
-    caption = styles["Caption"]
-    caption.font.name = BODY_FONT
-    caption.font.size = Pt(9)
-    caption.font.italic = True
-    caption.font.color.rgb = COLORS["gray_medium"]
-    caption.paragraph_format.space_before = Pt(2)
-    caption.paragraph_format.space_after = Pt(10)
-
-    return doc
 
 
 def add_cover_page(doc, *, title, subtitle, project, doc_number, revision,
                    doc_date, prepared_by, checked_by, approved_by):
-    section = doc.sections[0]
-    section.page_width = PAGE_WIDTH_A4
-    section.page_height = PAGE_HEIGHT_A4
-    section.top_margin = Cm(2.5)
-    section.bottom_margin = Cm(2.0)
-    section.left_margin = MARGIN_LEFT
-    section.right_margin = MARGIN_RIGHT
-
-    for _ in range(3):
-        doc.add_paragraph()
-
-    para = doc.add_paragraph()
-    run = para.add_run(title)
-    run.font.name = BODY_FONT
-    run.font.size = Pt(28)
-    run.font.bold = True
-    run.font.color.rgb = COLORS["primary"]
-
-    para_sub = doc.add_paragraph()
-    run = para_sub.add_run(subtitle)
-    run.font.name = BODY_FONT
-    run.font.size = Pt(13)
-    run.font.color.rgb = COLORS["gray_medium"]
-    para_sub.paragraph_format.space_after = Pt(10)
-    _bottom_border(para_sub, "FFD100", size="12")
-
-    doc.add_paragraph()
-
-    meta = [
-        ("Document No.", doc_number),
-        ("Revision", revision),
-        ("Applies to", project),
-        ("Date", doc_date),
-        ("Audience", "Planners, schedulers, project controls"),
-        ("Classification", "Internal Use"),
-    ]
-    table = doc.add_table(rows=len(meta), cols=2)
-    for index, (label, value) in enumerate(meta):
-        left, right = table.rows[index].cells
-        left.text = label
-        left.width = Cm(4.5)
-        _style_cell(left, bold=True, size=Pt(10), color=COLORS["gray_medium"])
-        right.text = value
-        _style_cell(right, size=Pt(10), color=COLORS["black"])
-    _remove_table_borders(table)
-
-    doc.add_paragraph()
-    doc.add_paragraph()
-
-    approval = doc.add_table(rows=2, cols=3)
-    approval.style = "Table Grid"
-    approval.alignment = WD_TABLE_ALIGNMENT.LEFT
-    for column, (heading, value) in enumerate(
-            zip(("Prepared by", "Checked by", "Approved by"),
-                (prepared_by, checked_by, approved_by))):
-        head_cell = approval.rows[0].cells[column]
-        head_cell.text = heading
-        _style_cell(head_cell, bold=True, size=Pt(9),
-                    color=COLORS["gray_medium"])
-        _set_cell_shading(head_cell, "D6E4F0")
-
-        value_cell = approval.rows[1].cells[column]
-        value_cell.text = value
-        _style_cell(value_cell, size=Pt(10), color=COLORS["black"])
-
-    doc.add_page_break()
-
-
-def add_toc(doc):
-    heading = doc.add_paragraph("Table of Contents", style="Heading 1")
-    heading.paragraph_format.space_before = Pt(0)
-
-    para = doc.add_paragraph()
-    _add_field(para, r' TOC \o "1-3" \h \z \u ')
-
-    note = doc.add_paragraph()
-    run = note.add_run(
-        "If the contents list appears empty, click it and press F9 to update "
-        "the field (a Word behaviour for generated documents)."
+    """Guide-specific cover metadata, rendered by the shared cover builder."""
+    _add_cover_page(
+        doc,
+        title=title,
+        subtitle=subtitle,
+        meta=[
+            ("Document No.", doc_number),
+            ("Revision", revision),
+            ("Applies to", project),
+            ("Date", doc_date),
+            ("Audience", "Planners, schedulers, project controls"),
+            ("Classification", "Internal Use"),
+        ],
+        approvals=[
+            ("Prepared by", prepared_by),
+            ("Checked by", checked_by),
+            ("Approved by", approved_by),
+        ],
     )
-    run.font.name = BODY_FONT
-    run.font.size = Pt(8)
-    run.font.italic = True
-    run.font.color.rgb = COLORS["gray_medium"]
 
-    doc.add_page_break()
-
-
-def configure_headers_footers(doc, *, project, doc_number, doc_date):
-    for index, section in enumerate(doc.sections):
-        if index == 0:
-            section.different_first_page_header_footer = True
-
-        header = section.header
-        header.is_linked_to_previous = False
-        para = header.paragraphs[0]
-        para.text = ""
-        run = para.add_run(f"{doc_number}    |    {project}")
-        run.font.name = BODY_FONT
-        run.font.size = Pt(8)
-        run.font.color.rgb = COLORS["gray_medium"]
-
-        footer = section.footer
-        footer.is_linked_to_previous = False
-        para = footer.paragraphs[0]
-        para.text = ""
-        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        run = para.add_run("Internal Use    |    Page ")
-        run.font.name = BODY_FONT
-        run.font.size = Pt(8)
-        run.font.color.rgb = COLORS["gray_medium"]
-
-        page_run = _add_field(para, " PAGE ")
-        page_run.font.name = BODY_FONT
-        page_run.font.size = Pt(8)
-        page_run.font.color.rgb = COLORS["gray_medium"]
-
-        run = para.add_run(f"    |    {doc_date}")
-        run.font.name = BODY_FONT
-        run.font.size = Pt(8)
-        run.font.color.rgb = COLORS["gray_medium"]
-
-
-# ---------------------------------------------------------------------------
-# Content helpers
-# ---------------------------------------------------------------------------
-def add_body(doc, text, *, bold_lead=None, space_after=6):
-    para = doc.add_paragraph()
-    para.paragraph_format.space_after = Pt(space_after)
-    if bold_lead:
-        run = para.add_run(bold_lead)
-        run.font.bold = True
-        run.font.color.rgb = COLORS["black"]
-    para.add_run(text)
-    return para
-
-
-def add_bullets(doc, items):
-    for item in items:
-        para = doc.add_paragraph(style="List Bullet")
-        para.paragraph_format.space_after = Pt(3)
-        if isinstance(item, tuple):
-            lead, rest = item
-            run = para.add_run(lead)
-            run.font.bold = True
-            run.font.color.rgb = COLORS["black"]
-            para.add_run(rest)
-        else:
-            para.add_run(item)
-
-
-def add_note(doc, label, text):
-    """A single-cell shaded callout."""
-    table = doc.add_table(rows=1, cols=1)
-    table.style = "Table Grid"
-    cell = table.rows[0].cells[0]
-
-    first = cell.paragraphs[0]
-    first.text = ""
-    run = first.add_run(label.upper())
-    run.font.name = BODY_FONT
-    run.font.size = Pt(8)
-    run.font.bold = True
-    run.font.color.rgb = COLORS["primary"]
-    first.paragraph_format.space_after = Pt(2)
-
-    body = cell.add_paragraph()
-    run = body.add_run(text)
-    run.font.name = BODY_FONT
-    run.font.size = Pt(9.5)
-    run.font.color.rgb = COLORS["gray_dark"]
-
-    _set_cell_shading(cell, NOTE_FILL)
-    doc.add_paragraph().paragraph_format.space_after = Pt(2)
-
-
-def add_table(doc, headers, rows, *, caption=None, widths=None,
-              align=None, highlight=None):
-    """
-    Render a table with the blue header row and alternating shading.
-
-    ``align``     - per-column WD_ALIGN_PARAGRAPH, or None for left
-    ``highlight`` - predicate(row) -> True to tint the row
-    """
-    if caption:
-        para = doc.add_paragraph(caption, style="Caption")
-        para.alignment = WD_ALIGN_PARAGRAPH.LEFT
-
-    table = doc.add_table(rows=len(rows) + 1, cols=len(headers))
-    table.style = "Table Grid"
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
-
-    for column, title in enumerate(headers):
-        cell = table.rows[0].cells[column]
-        cell.text = str(title)
-        _style_cell(cell, bold=True, size=Pt(9), color=COLORS["white"],
-                    align=WD_ALIGN_PARAGRAPH.LEFT)
-        _set_cell_shading(cell, HEADER_FILL)
-
-    for row_index, row in enumerate(rows):
-        tinted = highlight(row) if highlight else False
-        for column, value in enumerate(row):
-            cell = table.rows[row_index + 1].cells[column]
-            cell.text = "" if value is None else str(value)
-            _style_cell(
-                cell, size=Pt(9),
-                align=(align[column] if align else None),
-            )
-            if tinted:
-                _set_cell_shading(cell, CRITICAL_FILL)
-            elif row_index % 2 == 1:
-                _set_cell_shading(cell, ALT_ROW_FILL)
-
-    if widths:
-        for row in table.rows:
-            for column, width in enumerate(widths):
-                row.cells[column].width = width
-
-    doc.add_paragraph().paragraph_format.space_after = Pt(2)
-    return table
 
 
 # ---------------------------------------------------------------------------

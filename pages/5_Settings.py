@@ -5,12 +5,14 @@ Application settings and user preferences
 
 import streamlit as st
 
-from src.services import get_auth, get_database
+from src.services import get_auth, get_database, invalidate_schedule_caches
 from src.auth.security import validate_password_strength
 from src.config import settings
+from src.ui.theme import app_header, fmt_count, inject_css
 from src.utils.helpers import init_session_state, display_success_message
 
 st.set_page_config(page_title="Settings", page_icon="⚙️", layout="wide")
+inject_css("Settings")
 
 # Initialize
 init_session_state()
@@ -20,16 +22,16 @@ auth = get_auth(db)
 # Check authentication
 auth.require_auth()
 
-st.title("⚙️ Settings")
+app_header("⚙️ Settings", "Manage your profile, projects and application access")
 
 # User info in sidebar
 with st.sidebar:
-    st.markdown("---")
+    st.divider()
     user = auth.get_current_user()
     if user:
         st.markdown(f"**User:** {user['username']}")
         st.markdown(f"**Role:** {user['role'].capitalize()}")
-    st.markdown("---")
+    st.divider()
 
 # Tabs for different settings
 # Administration is a separate tab rather than a section buried in "About",
@@ -149,6 +151,9 @@ with tab2:
                     if st.button("🗑️ Delete Project", key=f"del_{project['id']}",
                                  disabled=not st.session_state.get(confirm_key)):
                         db.delete_project(project['id'], user['id'])
+                        # Deleting a project cascades to its schedules and
+                        # analyses, so the cached readers must be dropped.
+                        invalidate_schedule_caches()
                         display_success_message(
                             f"Project '{project['project_name']}' deleted."
                         )

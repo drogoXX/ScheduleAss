@@ -8,6 +8,7 @@ import streamlit as st
 from src.config import settings
 from src.logging_config import get_logger
 from src.services import get_auth, get_database
+from src.ui.theme import app_header, fmt_count, inject_css, section_divider
 from src.utils.helpers import init_session_state
 
 logger = get_logger("app")
@@ -19,6 +20,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+inject_css("Home")
 
 # Shared database instance; AuthManager is per-session (it uses session_state).
 db = get_database()
@@ -30,14 +32,12 @@ init_session_state()
 
 def show_login_page():
     """Display login page"""
-    st.title("🔐 Schedule Quality Analyzer")
-    st.subheader("EPC Schedule Assessment & Analysis")
+    app_header("🔐 Schedule Quality Analyzer", "EPC Schedule Assessment & Analysis")
 
     # Center the login form
     col1, col2, col3 = st.columns([1, 2, 1])
 
     with col2:
-        st.markdown("---")
         st.markdown("### Login")
 
         with st.form("login_form"):
@@ -60,7 +60,7 @@ def show_login_page():
                 else:
                     st.warning("⚠️ Please enter both username and password")
 
-        st.markdown("---")
+        st.divider()
 
         # About section
         with st.expander("ℹ️ About"):
@@ -85,12 +85,16 @@ def show_login_page():
 
 def show_home_page():
     """Display home page for authenticated users"""
-    st.title("📊 Schedule Quality Analyzer")
+    user = auth.get_current_user()
+
+    app_header(
+        "📊 Schedule Quality Analyzer",
+        f"Welcome, {user['username']} — EPC schedule assessment and analysis",
+    )
 
     # User info in sidebar
     with st.sidebar:
-        st.markdown("---")
-        user = auth.get_current_user()
+        st.divider()
         if user:
             st.markdown(f"**User:** {user['username']}")
             st.markdown(f"**Role:** {user['role'].capitalize()}")
@@ -99,31 +103,26 @@ def show_home_page():
                 auth.logout()
                 st.rerun()
 
-        st.markdown("---")
-
-    # Welcome message
-    user = auth.get_current_user()
-    st.markdown(f"### Welcome, {user['username']}! 👋")
+        st.divider()
 
     # Quick stats
-    st.markdown("---")
     st.markdown("### Quick Overview")
 
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("Projects", len(db.get_all_projects()))
+        st.metric("Projects", fmt_count(len(db.get_all_projects())))
 
     with col2:
-        st.metric("Schedules", db.count_schedules())
+        st.metric("Schedules", fmt_count(db.count_schedules()))
 
     with col3:
-        st.metric("Analyses", db.count_analyses())
+        st.metric("Analyses", fmt_count(db.count_analyses()))
 
     with col4:
-        st.metric("Users", len(db.get_all_users()))
+        st.metric("Users", fmt_count(len(db.get_all_users())))
 
-    st.markdown("---")
+    section_divider()
 
     # Navigation guide
     st.markdown("### Getting Started")
@@ -148,7 +147,7 @@ def show_home_page():
         """)
 
     # Recent activity
-    st.markdown("---")
+    section_divider()
     st.markdown("### Recent Projects")
 
     projects = db.get_all_projects()
@@ -166,7 +165,7 @@ def show_home_page():
         st.info("No projects yet. Upload a schedule to get started!")
 
     # Help section
-    st.markdown("---")
+    section_divider()
     with st.expander("❓ Help & Documentation"):
         st.markdown("""
         ### How to Use

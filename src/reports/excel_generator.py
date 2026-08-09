@@ -8,6 +8,10 @@ import io
 from typing import Dict, List
 from datetime import datetime
 
+from src.reports.docx_styles import (
+    ALT_ROW_FILL, CRITICAL_FILL, HEADER_FILL, SUCCESS_FILL, WARNING_FILL,
+)
+
 
 class ExcelGenerator:
     """Generates detailed analysis reports in Excel format"""
@@ -234,12 +238,17 @@ class ExcelGenerator:
             workbook = writer.book
             worksheet = workbook['DCMA_Compliance']
 
-            # Define fills
-            pass_fill = PatternFill(start_color='90EE90', end_color='90EE90', fill_type='solid')  # Light green
-            fail_fill = PatternFill(start_color='FFB6C1', end_color='FFB6C1', fill_type='solid')  # Light red
-            na_fill = PatternFill(start_color='FFFFE0', end_color='FFFFE0', fill_type='solid')  # Light yellow
-            manual_fill = PatternFill(start_color='E0E0E0', end_color='E0E0E0', fill_type='solid')  # Light gray
-            header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')  # Blue
+            # Fills come from the shared palette (src/reports/docx_styles.py)
+            # so the workbook matches the DOCX report and the dashboard.
+            def _fill(color):
+                return PatternFill(start_color=color, end_color=color,
+                                   fill_type='solid')
+
+            pass_fill = _fill(SUCCESS_FILL)
+            fail_fill = _fill(CRITICAL_FILL)
+            na_fill = _fill(ALT_ROW_FILL)
+            manual_fill = _fill(WARNING_FILL)
+            header_fill = _fill(HEADER_FILL)
             header_font = Font(color='FFFFFF', bold=True)
 
             # Apply conditional formatting to Status column (column D)

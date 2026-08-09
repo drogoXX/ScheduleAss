@@ -5,15 +5,20 @@ Generate and download professional reports (DOCX and Excel)
 
 import streamlit as st
 from datetime import datetime
-from src.services import get_auth, get_database
+from src.services import get_auth, get_database, load_analysis, load_schedule
 from src.reports.docx_generator import DOCXGenerator
 from src.reports.excel_generator import ExcelGenerator
+from src.ui.diagnostics import timed
+from src.ui.theme import (
+    app_header, fmt_count, fmt_score, inject_css, section_divider,
+)
 from src.utils.helpers import (
     init_session_state, display_no_data_message,
     display_success_message, display_error_message, report_error
 )
 
 st.set_page_config(page_title="Reports", page_icon="📄", layout="wide")
+inject_css("Reports")
 
 # Initialize
 init_session_state()
@@ -23,17 +28,19 @@ auth = get_auth(db)
 # Check authentication
 auth.require_auth()
 
-st.title("📄 Reports")
-st.markdown("Generate and download professional schedule analysis reports")
+app_header(
+    "📄 Reports",
+    "Generate and download professional schedule analysis reports",
+)
 
 # User info in sidebar
 with st.sidebar:
-    st.markdown("---")
+    st.divider()
     user = auth.get_current_user()
     if user:
         st.markdown(f"**User:** {user['username']}")
         st.markdown(f"**Role:** {user['role'].capitalize()}")
-    st.markdown("---")
+    st.divider()
 
 # Schedule selection
 st.markdown("### Select Schedule")
@@ -59,8 +66,12 @@ selected_schedule_label = st.selectbox(
 selected_schedule_id = schedule_options[selected_schedule_label]
 
 try:
-    schedule = db.get_schedule_by_id(selected_schedule_id)
-    analysis = db.get_analysis_by_schedule(selected_schedule_id)
+    # Timed: this is the largest read in the app (the full schedule JSON) and
+    # the prime suspect if this page ever appears to hang.
+    with timed("Reports: load schedule"):
+        schedule = load_schedule(selected_schedule_id)
+    with timed("Reports: load analysis"):
+        analysis = load_analysis(selected_schedule_id)
 except Exception as e:
     report_error("Could not load the selected schedule.", e, logger_name="reports")
     st.stop()
@@ -88,7 +99,7 @@ try:
         st.write(f"**Version:** {schedule['version_number']}")
         st.write(f"**File:** {schedule['file_name']}")
         st.write(f"**Upload Date:** {schedule['upload_date'][:10]}")
-        st.write(f"**Activities:** {schedule['schedule_data']['total_activities']}")
+        st.write(f"**Activities:** {fmt_count(schedule['schedule_data']['total_activities'])}")
     
     with col2:
         st.markdown("#### Analysis Summary")
@@ -104,10 +115,10 @@ try:
             else:
                 rating = 'Unknown'
     
-            st.write(f"**Health Score:** {health_score:.1f}/100")
+            st.write(f"**Health Score:** {fmt_score(health_score)}")
             st.write(f"**Rating:** {rating}")
-            st.write(f"**Issues Found:** {len(analysis.get('issues', []))}")
-            st.write(f"**Recommendations:** {len(analysis.get('recommendations', []))}")
+            st.write(f"**Issues Found:** {fmt_count(len(analysis.get('issues', [])))}")
+            st.write(f"**Recommendations:** {fmt_count(len(analysis.get('recommendations', [])))}")
         except Exception as e:
             report_error(
                 "Could not load the analysis summary. If this analysis was "
@@ -129,16 +140,17 @@ try:
         st.info("""
         **Contains:**
         - Cover page with health score
+        - Table of contents, running header and page numbers
         - Executive summary
-        - DCMA 14-Point compliance checklist
+        - DCMA 14-Point compliance checklist and charts
         - Key performance metrics (CPLI, BEI)
         - Issues summary table
         - Prioritized recommendations
         - Methodology appendix
-    
+
         **Best for:** Stakeholder presentations, client reports
         """)
-    
+
         if st.button("📥 Generate DOCX Report", use_container_width=True, type="primary"):
             with st.spinner("Generating DOCX report..."):
                 try:
@@ -150,37 +162,54 @@ try:
                         'issues': analysis['issues'],
                         'recommendations': analysis.get('recommendations', [])
                     }
-    
+
                     # Generate DOCX
                     docx_gen = DOCXGenerator(
                         project_name=project_name,
                         schedule_data=schedule['schedule_data'],
                         analysis_results=full_analysis
                     )
-    
-                    docx_bytes = docx_gen.generate()
-    
-                    # Create filename
+
                     filename = f"Schedule_Analysis_{project_name}_v{schedule['version_number']}_{datetime.now().strftime('%Y%m%d')}.docx"
-    
-                    # Download button
-                    st.download_button(
-                        label="📥 Download DOCX Report",
-                        data=docx_bytes,
-                        file_name=filename,
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        use_container_width=True
-                    )
-    
+
+                    # Timed: DOCX generation renders charts through kaleido,
+                    # which launches a browser engine and is the slowest step
+                    # in the app.
+                    with timed("Reports: generate DOCX", warn_after=5.0):
+                        docx_bytes = docx_gen.generate()
+
+                    # Cache the bytes in session state. Clicking a download
+                    # button triggers a rerun, so a button created inside this
+                    # `if st.button(...)` branch would vanish before it could be
+                    # used; holding the payload outside the branch keeps it.
+                    st.session_state.docx_report = {
+                        'data': docx_bytes,
+                        'filename': filename,
+                        'schedule_id': schedule['id'],
+                    }
+
                     display_success_message("DOCX report generated successfully!")
-    
+
                     # Log action
                     db.log_action(user['id'], 'export', schedule['id'],
                                  {'report_type': 'docx', 'filename': filename})
-    
+
                 except Exception as e:
                     report_error("Failed to generate the DOCX report.", e,
                                  logger_name="reports")
+
+        # Rendered outside the button branch so it survives the rerun. Scoped to
+        # the selected schedule, so switching schedules cannot hand the user a
+        # report for a different one.
+        docx_report = st.session_state.get('docx_report')
+        if docx_report and docx_report['schedule_id'] == schedule['id']:
+            st.download_button(
+                label="📥 Download DOCX Report",
+                data=docx_report['data'],
+                file_name=docx_report['filename'],
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True
+            )
     
     with col2:
         st.markdown("#### 📊 Detailed Analysis (Excel)")
@@ -215,20 +244,19 @@ try:
                         analysis_results=full_analysis
                     )
     
-                    excel_bytes = excel_gen.generate()
-    
                     # Create filename
                     filename = f"Schedule_Analysis_{project_name}_v{schedule['version_number']}_{datetime.now().strftime('%Y%m%d')}.xlsx"
-    
-                    # Download button
-                    st.download_button(
-                        label="📥 Download Excel Report",
-                        data=excel_bytes,
-                        file_name=filename,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-    
+
+                    # Cached for the same reason as the DOCX payload above.
+                    with timed("Reports: generate Excel", warn_after=5.0):
+                        excel_bytes = excel_gen.generate()
+
+                    st.session_state.excel_report = {
+                        'data': excel_bytes,
+                        'filename': filename,
+                        'schedule_id': schedule['id'],
+                    }
+
                     display_success_message("Excel report generated successfully!")
     
                     # Log action
@@ -238,8 +266,18 @@ try:
                 except Exception as e:
                     report_error("Failed to generate the Excel report.", e,
                                  logger_name="reports")
-    
-    st.markdown("---")
+
+        excel_report = st.session_state.get('excel_report')
+        if excel_report and excel_report['schedule_id'] == schedule['id']:
+            st.download_button(
+                label="📥 Download Excel Report",
+                data=excel_report['data'],
+                file_name=excel_report['filename'],
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
+    section_divider()
     
     # Batch export (if multiple schedules selected)
     st.markdown("### Batch Export (Multiple Schedules)")

@@ -48,7 +48,13 @@ class TestStatusBadge:
         assert "<script>" not in badge
 
     def test_unknown_status_gets_the_default_colour(self):
-        assert "gray" in display_status_badge("something-unexpected")
+        # Colours come from the shared palette via a CSS class, so the neutral
+        # variant is what an unrecognised status must fall back to.
+        assert "status-neutral" in display_status_badge("something-unexpected")
+
+    def test_known_status_gets_its_variant(self):
+        assert "status-danger" in display_status_badge("fail")
+        assert "status-success" in display_status_badge("pass")
 
 
 class TestCardsRenderSafely:
