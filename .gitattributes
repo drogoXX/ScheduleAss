@@ -1,0 +1,22 @@
+# Normalise line endings: LF in the repository, native on checkout.
+# Without this, files committed from Windows and Linux churn against each other.
+* text=auto
+
+# Explicit for the file types in this project.
+*.py    text diff=python
+*.md    text
+*.txt   text
+*.toml  text
+*.csv   text
+*.ini   text
+*.html  text
+*.example text
+
+# Binary - never diff or convert.
+*.docx  binary
+*.xlsx  binary
+*.pdf   binary
+*.xer   binary
+*.png   binary
+*.ico   binary
+*.db    binary

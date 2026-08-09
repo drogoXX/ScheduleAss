@@ -6,9 +6,25 @@ textColor = "#262730"
 font = "sans serif"
 
 [server]
+# Keep in step with APP_MAX_UPLOAD_MB: this guards the transport layer, the
+# environment variable is enforced in application code.
 maxUploadSize = 50
+
+# CSRF protection requires the matching CORS policy, so enableCORS is left at
+# its default of true. Setting it to false here was overridden by Streamlit at
+# startup and only produced a warning.
 enableXsrfProtection = true
-enableCORS = false
+
+[client]
+# Do not surface tracebacks in the browser; errors are logged server-side and
+# shown to users with a reference id instead.
+showErrorDetails = "none"
+
+# Hide the developer toolbar (Rerun / Clear cache) from end users.
+toolbarMode = "minimal"
 
 [browser]
 gatherUsageStats = false
+
+[logger]
+level = "info"

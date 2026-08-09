@@ -42,13 +42,25 @@ ENV/
 
 # Database
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
+
+# Runtime data directory (SQLite database + logs)
+instance/
 
 # Reports (generated files)
 *.docx
 *.xlsx
 !data/sample_schedule.csv
+
+# Client project material - never publish.
+# These hold real P6 extracts and client deliverables and are not needed to
+# run the application or the test suite, which use data/sample_schedule.csv.
+Schedule extract/
+input/
+*.xer
 
 # Environment variables
 .env

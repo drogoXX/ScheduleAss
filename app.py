@@ -4,9 +4,13 @@ EPC Schedule Assessment & Analysis Application
 """
 
 import streamlit as st
-from src.database.db_manager import DatabaseManager
-from src.auth.auth_manager import AuthManager
+
+from src.config import settings
+from src.logging_config import get_logger
+from src.services import get_auth, get_database
 from src.utils.helpers import init_session_state
+
+logger = get_logger("app")
 
 # Page configuration
 st.set_page_config(
@@ -16,19 +20,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize database and auth managers
-@st.cache_resource
-def get_db_manager():
-    """Get database manager instance"""
-    return DatabaseManager()
-
-@st.cache_resource
-def get_auth_manager():
-    """Get authentication manager instance"""
-    return AuthManager(get_db_manager())
-
-db = get_db_manager()
-auth = get_auth_manager()
+# Shared database instance; AuthManager is per-session (it uses session_state).
+db = get_database()
+auth = get_auth(db)
 
 # Initialize session state
 init_session_state()
@@ -57,32 +51,24 @@ def show_login_page():
                         st.success("✅ Login successful!")
                         st.rerun()
                     else:
-                        st.error("❌ Invalid username or password")
+                        # Deliberately generic: does not reveal whether the
+                        # username exists or the account is locked.
+                        st.error(
+                            "❌ Invalid username or password. "
+                            "Repeated failures temporarily lock the account."
+                        )
                 else:
                     st.warning("⚠️ Please enter both username and password")
 
         st.markdown("---")
-
-        # Demo credentials info
-        with st.expander("📝 Demo Credentials"):
-            st.info("""
-            **Admin Account:**
-            - Username: `admin`
-            - Password: `admin123`
-
-            **Viewer Account:**
-            - Username: `viewer`
-            - Password: `viewer123`
-            """)
 
         # About section
         with st.expander("ℹ️ About"):
             st.markdown("""
             ### Schedule Quality Analyzer
 
-            Automate EPC schedule assessment using industry-standard frameworks:
-            - **DCMA 14-Point Schedule Assessment**
-            - **GAO Schedule Assessment Guide**
+            Automate EPC schedule assessment using the industry-standard
+            **DCMA 14-Point Schedule Assessment**.
 
             **Key Features:**
             - Automated schedule quality analysis
@@ -126,20 +112,16 @@ def show_home_page():
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        project_count = len(db.get_all_projects())
-        st.metric("Projects", project_count)
+        st.metric("Projects", len(db.get_all_projects()))
 
     with col2:
-        schedule_count = len(st.session_state.schedules)
-        st.metric("Schedules", schedule_count)
+        st.metric("Schedules", db.count_schedules())
 
     with col3:
-        analysis_count = len(st.session_state.analysis_results)
-        st.metric("Analyses", analysis_count)
+        st.metric("Analyses", db.count_analyses())
 
     with col4:
-        user_count = len(st.session_state.users)
-        st.metric("Users", user_count)
+        st.metric("Users", len(db.get_all_users()))
 
     st.markdown("---")
 
@@ -226,6 +208,9 @@ def show_home_page():
 
 def main():
     """Main application logic"""
+    if not settings.is_production:
+        st.sidebar.info(f"Environment: {settings.ENV}")
+
     if not auth.is_authenticated():
         show_login_page()
     else:

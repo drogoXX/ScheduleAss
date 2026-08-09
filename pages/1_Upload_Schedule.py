@@ -4,23 +4,26 @@ Allows admins to upload and parse P6 schedule CSV files
 """
 
 import streamlit as st
-from src.database.db_manager import DatabaseManager
-from src.auth.auth_manager import AuthManager
+from src.services import get_auth, get_database
 from src.parsers.schedule_parser import ScheduleParser
 from src.analysis.dcma_analyzer import DCMAAnalyzer
 from src.analysis.metrics_calculator import MetricsCalculator
 from src.analysis.recommendations import RecommendationsEngine
+from src.config import settings
+from src.logging_config import get_logger
 from src.utils.helpers import (
     display_success_message, display_error_message,
-    display_warning_message, init_session_state
+    display_warning_message, init_session_state, report_error
 )
+
+logger = get_logger("upload")
 
 st.set_page_config(page_title="Upload Schedule", page_icon="📤", layout="wide")
 
 # Initialize
 init_session_state()
-db = DatabaseManager()
-auth = AuthManager(db)
+db = get_database()
+auth = get_auth(db)
 
 # Check authentication and permissions
 auth.require_auth()
@@ -81,16 +84,18 @@ with col1:
             if create_project:
                 if project_name and project_code:
                     # Check if code already exists
-                    existing = db.get_project_by_code(project_code)
-                    if existing:
-                        display_error_message(f"Project code '{project_code}' already exists")
-                    else:
+                    try:
                         new_project = db.create_project(
                             project_name=project_name,
                             project_code=project_code,
                             description=project_desc,
                             created_by=user['id']
                         )
+                    except ValueError as exc:
+                        # The database enforces uniqueness, so a concurrent
+                        # create cannot slip past a pre-check.
+                        display_error_message(str(exc))
+                    else:
                         selected_project_id = new_project['id']
                         display_success_message(f"Project '{project_name}' created successfully!")
                         st.rerun()
@@ -109,17 +114,37 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
-    st.success(f"✅ File uploaded: {uploaded_file.name} ({uploaded_file.size / 1024:.1f} KB)")
+    if uploaded_file.size > settings.max_upload_bytes:
+        display_error_message(
+            f"File is {uploaded_file.size / 1024 / 1024:.1f} MB, which exceeds "
+            f"the {settings.MAX_UPLOAD_MB} MB limit."
+        )
+        uploaded_file = None
+    else:
+        st.success(
+            f"✅ File uploaded: {uploaded_file.name} "
+            f"({uploaded_file.size / 1024:.1f} KB)"
+        )
 
-    # Preview file
-    with st.expander("📄 Preview File (first 10 rows)"):
-        try:
-            import pandas as pd
-            import io
-            preview_df = pd.read_csv(io.BytesIO(uploaded_file.getvalue()), nrows=10)
-            st.dataframe(preview_df, use_container_width=True)
-        except Exception as e:
-            display_error_message(f"Could not preview file: {str(e)}")
+        # Preview file
+        with st.expander("📄 Preview File (first 10 rows)"):
+            try:
+                import io
+
+                import pandas as pd
+
+                preview_df = pd.read_csv(
+                    io.BytesIO(uploaded_file.getvalue()),
+                    nrows=10,
+                    encoding_errors="replace",
+                )
+                st.dataframe(preview_df, use_container_width=True)
+            except Exception as e:
+                logger.warning("Preview failed for %r: %s", uploaded_file.name, e)
+                display_error_message(
+                    "Could not preview this file. It may still analyse "
+                    "correctly - try running the analysis."
+                )
 
 st.markdown("---")
 
@@ -212,18 +237,21 @@ if analyze_button:
             # Step 6: Save analysis results
             status_text.text("💾 Saving analysis results...")
 
+            # The derived payloads are persisted alongside the core results.
+            # Previously they were only attached to the in-memory dict, so a
+            # page refresh degraded the dashboard to "Unknown" ratings.
             analysis = db.save_analysis_result(
                 schedule_id=schedule['id'],
                 metrics=dcma_results['metrics'],
                 issues=dcma_results['issues'],
                 recommendations=recommendations,
-                health_score=performance_metrics['health_score']['score']
+                health_score=performance_metrics['health_score']['score'],
+                extra={
+                    'performance_metrics': performance_metrics,
+                    'dcma_metrics': dcma_results['metrics'],
+                    'dcma_14_point': dcma_14_summary,
+                },
             )
-
-            # Add performance metrics and DCMA 14-point summary to analysis
-            analysis['performance_metrics'] = performance_metrics
-            analysis['dcma_metrics'] = dcma_results['metrics']
-            analysis['dcma_14_point'] = dcma_14_summary
 
             # Store in session state
             st.session_state.current_schedule = schedule
@@ -283,8 +311,13 @@ if analyze_button:
         except Exception as e:
             progress_bar.empty()
             status_text.empty()
-            display_error_message(f"An error occurred during analysis: {str(e)}")
-            st.exception(e)
+            report_error(
+                "The schedule could not be analysed. The file may be malformed "
+                "or contain unexpected values. Please check the file and try "
+                "again, or quote the reference below to your administrator.",
+                e,
+                logger_name="upload",
+            )
 
     else:
         if not selected_project_id:

@@ -67,9 +67,19 @@ The application will open at `http://localhost:8501`
 
 ### Step 3: Login
 
-**Use Admin account:**
-- Username: `admin`
-- Password: `admin123`
+There are no default accounts. Sign in as the administrator created on first
+start:
+
+- **Username:** the value of `APP_ADMIN_USERNAME` (default `admin`)
+- **Password:** the value of `APP_ADMIN_PASSWORD`, or — if that was not set —
+  the random password written to `<APP_DATA_DIR>/logs/app.log` as a `WARNING`
+  the first time the app started.
+
+For a disposable test run, set the password explicitly before starting:
+
+```bash
+APP_ADMIN_PASSWORD='LocalTestAdmin1' APP_DATA_DIR=./instance streamlit run app.py
+```
 
 ### Step 4: Upload Sample Schedule
 

@@ -97,8 +97,8 @@ class DOCXGenerator:
         stats = self.analysis_results['performance_metrics']['statistics']
 
         summary_text = f"""
-This report presents a comprehensive analysis of the {self.project_name} schedule based on industry-standard \
-DCMA 14-Point Assessment and GAO Schedule Assessment Guide best practices.
+This report presents an analysis of the {self.project_name} schedule against the industry-standard \
+DCMA 14-Point Schedule Assessment.
 
 The schedule contains {stats['total_activities']} activities with an overall health score of \
 {health_score['score']:.1f}/100, rated as "{health_score['rating']}".
@@ -568,15 +568,19 @@ The schedule contains {stats['total_activities']} activities with an overall hea
         self.document.add_heading('Appendix: Methodology', level=1)
 
         methodology_text = """
-This analysis is based on the following industry-standard frameworks:
+This analysis is based on the following industry-standard framework:
 
 1. DCMA 14-Point Schedule Assessment
    - Defense Contract Management Agency best practices for schedule quality
    - Focuses on logic integrity, schedule realism, and execution readiness
 
-2. GAO Schedule Assessment Guide
-   - Government Accountability Office guidelines for schedule management
-   - Emphasizes comprehensive planning and reliable progress measurement
+Schedule Health Score:
+   The 0-100 score is a weighted average of the DCMA checks above. Each check
+   scores 100 at or better than its DCMA target and declines linearly to 0 at a
+   defined bound. Checks without supporting data are excluded and the remaining
+   weights renormalised. Thresholds follow the DCMA 14-Point Assessment; the
+   weights are this application's assessment of relative severity and are not
+   defined by DCMA.
 
 Key Metrics Definitions:
 
