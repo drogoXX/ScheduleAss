@@ -32,7 +32,15 @@ with st.sidebar:
     st.markdown("---")
 
 # Tabs for different settings
-tab1, tab2, tab3 = st.tabs(["👤 User Profile", "📁 Projects", "ℹ️ About"])
+# Administration is a separate tab rather than a section buried in "About",
+# and is only created for admins.
+tab_labels = ["👤 User Profile", "📁 Projects", "ℹ️ About"]
+if auth.is_admin():
+    tab_labels.append("🔐 Administration")
+
+tabs = st.tabs(tab_labels)
+tab1, tab2, tab3 = tabs[0], tabs[1], tabs[2]
+admin_tab = tabs[3] if auth.is_admin() else None
 
 # Tab 1: User Profile
 with tab1:
@@ -250,46 +258,15 @@ with tab3:
         st.write(f"- Analyses: {db.count_analyses()}")
         st.write(f"- Environment: {settings.ENV}")
 
-    # Admin-only actions
-    if auth.is_admin():
-        st.markdown("---")
-        st.markdown("### Admin Actions")
+# ---------------------------------------------------------------------------
+# Tab 4: Administration (admins only)
+# ---------------------------------------------------------------------------
+if admin_tab is not None:
+    with admin_tab:
+        st.markdown("## Administration")
 
-        if st.button("🔄 Clear All Caches", type="secondary"):
-            st.cache_data.clear()
-            st.cache_resource.clear()
-            display_success_message("Caches cleared successfully!")
-            st.rerun()
-
-        st.caption(
-            "Clearing caches only discards in-memory cached objects. "
-            "All projects, schedules and analyses are stored in the database "
-            "and are unaffected."
-        )
-
-        st.markdown("---")
-        st.markdown("### Audit Log")
-
-        audit_entries = db.get_audit_log(limit=200)
-        if audit_entries:
-            st.dataframe(
-                [
-                    {
-                        "Timestamp": entry["timestamp"],
-                        "User": entry["user_id"],
-                        "Action": entry["action_type"],
-                        "Resource": entry["resource_id"],
-                    }
-                    for entry in audit_entries
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-        else:
-            st.info("No audit entries recorded yet.")
-
-        st.markdown("---")
-        st.markdown("### User Management")
+        # ---- User management ----------------------------------------------
+        st.markdown("### Users")
 
         existing_users = db.get_all_users()
         st.dataframe(
@@ -297,9 +274,9 @@ with tab3:
                 {
                     "Username": u["username"],
                     "Email": u["email"],
-                    "Role": u["role"],
-                    "Active": u["is_active"],
-                    "Created": u["created"],
+                    "Role": u["role"].capitalize(),
+                    "Status": "Active" if u["is_active"] else "Disabled",
+                    "Created": u["created"][:10],
                 }
                 for u in existing_users
             ],
@@ -307,32 +284,175 @@ with tab3:
             hide_index=True,
         )
 
-        with st.form("create_user_form"):
-            st.markdown("**Create a new user**")
-            new_username = st.text_input("Username")
-            new_email = st.text_input("Email")
-            new_role = st.selectbox("Role", ["viewer", "admin"])
-            new_user_password = st.text_input("Password", type="password")
+        with st.expander("Create a new user", expanded=len(existing_users) < 2):
+            with st.form("create_user_form"):
+                new_username = st.text_input(
+                    "Username *", placeholder="e.g. m.rossi")
+                new_email = st.text_input(
+                    "Email", placeholder="e.g. m.rossi@example.com")
+                new_role = st.selectbox(
+                    "Role *", ["viewer", "admin"],
+                    help="Viewers get read-only access. Admins can upload, "
+                         "delete and manage users.",
+                )
+                new_user_password = st.text_input("Password *", type="password")
+                st.caption(
+                    f"Minimum {settings.MIN_PASSWORD_LENGTH} characters, "
+                    f"including an uppercase letter, a lowercase letter and a "
+                    f"digit. Send it over a secure channel and ask the user to "
+                    f"change it on first sign-in."
+                )
 
-            if st.form_submit_button("Create user"):
-                problems = validate_password_strength(new_user_password)
-                if not new_username.strip():
-                    st.error("❌ Username is required.")
-                elif problems:
-                    st.error("❌ " + " ".join(problems))
-                else:
-                    try:
-                        created = db.create_user(
-                            email=new_email,
-                            username=new_username,
-                            password=new_user_password,
-                            role=new_role,
+                if st.form_submit_button("Create user", type="primary"):
+                    problems = validate_password_strength(new_user_password)
+                    if not new_username.strip():
+                        st.error("Username is required.")
+                    elif problems:
+                        st.error(" ".join(problems))
+                    else:
+                        try:
+                            created = db.create_user(
+                                email=new_email,
+                                username=new_username,
+                                password=new_user_password,
+                                role=new_role,
+                            )
+                            db.log_action(
+                                user["id"], "create_user", created["id"],
+                                {"username": created["username"],
+                                 "role": created["role"]},
+                            )
+                            display_success_message(
+                                f"User '{created['username']}' created as "
+                                f"{created['role']}."
+                            )
+                            st.rerun()
+                        except ValueError as exc:
+                            st.error(str(exc))
+
+        with st.expander("Manage an existing user"):
+            other_users = [u for u in existing_users if u["id"] != user["id"]]
+            active_admins = [u for u in existing_users
+                             if u["role"] == "admin" and u["is_active"]]
+
+            if not other_users:
+                st.info(
+                    "You are the only account. Create another user above to "
+                    "manage it here."
+                )
+            else:
+                labels = {}
+                for candidate in other_users:
+                    suffix = "" if candidate["is_active"] else " - disabled"
+                    labels[f"{candidate['username']} "
+                           f"({candidate['role']}){suffix}"] = candidate
+
+                chosen = labels[st.selectbox("User", list(labels.keys()))]
+
+                st.markdown("**Reset password**")
+                with st.form("reset_password_form"):
+                    reset_password = st.text_input(
+                        f"New password for {chosen['username']}",
+                        type="password",
+                    )
+                    if st.form_submit_button("Reset password"):
+                        problems = validate_password_strength(reset_password)
+                        if problems:
+                            st.error(" ".join(problems))
+                        else:
+                            db.set_password(chosen["id"], reset_password)
+                            db.log_action(
+                                user["id"], "reset_password", chosen["id"],
+                                {"username": chosen["username"]},
+                            )
+                            display_success_message(
+                                f"Password reset for '{chosen['username']}'. "
+                                f"Any lockout has been cleared."
+                            )
+
+                st.markdown("---")
+                st.markdown("**Access**")
+
+                # Disabling the last active admin would lock everyone out of
+                # user management, and there is no password-reset flow to
+                # recover from that.
+                is_last_admin = (
+                    chosen["role"] == "admin"
+                    and chosen["is_active"]
+                    and len(active_admins) <= 1
+                )
+
+                if chosen["is_active"]:
+                    if is_last_admin:
+                        st.warning(
+                            "This is the only active admin account and cannot "
+                            "be disabled."
                         )
-                        db.log_action(user['id'], 'create_user', created['id'],
-                                      {'username': created['username']})
+                    if st.button(f"Disable {chosen['username']}",
+                                 disabled=is_last_admin):
+                        db.set_user_active(chosen["id"], False)
+                        db.log_action(
+                            user["id"], "disable_user", chosen["id"],
+                            {"username": chosen["username"]},
+                        )
                         display_success_message(
-                            f"User '{created['username']}' created."
+                            f"'{chosen['username']}' can no longer sign in."
                         )
                         st.rerun()
-                    except ValueError as exc:
-                        st.error(f"❌ {exc}")
+                    st.caption(
+                        "Disabling keeps the account and its audit history but "
+                        "blocks sign-in. Prefer this to deletion when someone "
+                        "leaves the project."
+                    )
+                else:
+                    if st.button(f"Re-enable {chosen['username']}"):
+                        db.set_user_active(chosen["id"], True)
+                        db.log_action(
+                            user["id"], "enable_user", chosen["id"],
+                            {"username": chosen["username"]},
+                        )
+                        display_success_message(
+                            f"'{chosen['username']}' can sign in again."
+                        )
+                        st.rerun()
+
+        # ---- Audit log ------------------------------------------------------
+        st.markdown("---")
+        st.markdown("### Audit Log")
+
+        audit_entries = db.get_audit_log(limit=200)
+        if audit_entries:
+            usernames = {u["id"]: u["username"] for u in existing_users}
+            st.dataframe(
+                [
+                    {
+                        "Timestamp": entry["timestamp"][:19].replace("T", " "),
+                        "User": usernames.get(entry["user_id"],
+                                              entry["user_id"] or "-"),
+                        "Action": entry["action_type"].replace("_", " ").title(),
+                        "Resource": entry["resource_id"],
+                    }
+                    for entry in audit_entries
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption(f"Showing the {len(audit_entries)} most recent entries.")
+        else:
+            st.info("No audit entries recorded yet.")
+
+        # ---- Maintenance -----------------------------------------------------
+        st.markdown("---")
+        st.markdown("### Maintenance")
+
+        if st.button("Clear all caches", type="secondary"):
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            display_success_message("Caches cleared successfully.")
+            st.rerun()
+
+        st.caption(
+            "Clearing caches only discards in-memory cached objects. All "
+            "projects, schedules and analyses are stored in the database and "
+            "are unaffected."
+        )
