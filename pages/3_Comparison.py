@@ -6,16 +6,15 @@ Compare multiple schedule versions side-by-side
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from src.database.db_manager import DatabaseManager
-from src.auth.auth_manager import AuthManager
+from src.services import get_auth, get_database
 from src.utils.helpers import init_session_state, display_no_data_message
 
 st.set_page_config(page_title="Comparison", page_icon="📊", layout="wide")
 
 # Initialize
 init_session_state()
-db = DatabaseManager()
-auth = AuthManager(db)
+db = get_database()
+auth = get_auth(db)
 
 # Check authentication
 auth.require_auth()
@@ -33,7 +32,7 @@ with st.sidebar:
     st.markdown("---")
 
 # Get schedules
-schedules = st.session_state.schedules
+schedules = db.get_all_schedules()
 
 if len(schedules) < 2:
     display_no_data_message("You need at least 2 schedules to compare. Please upload more schedules.")
@@ -215,16 +214,18 @@ df_comparison = pd.DataFrame(comparison_data)
 def highlight_change(val):
     """Highlight improvements in green, regressions in red"""
     try:
-        if val < 0:
-            return 'background-color: lightgreen'
-        elif val > 0:
-            return 'background-color: lightcoral'
-        else:
-            return ''
-    except:
+        numeric = float(val)
+    except (TypeError, ValueError):
+        # Non-numeric cells (e.g. 'N/A') are simply left unstyled.
         return ''
 
-styled_df = df_comparison.style.applymap(
+    if numeric < 0:
+        return 'background-color: lightgreen'
+    if numeric > 0:
+        return 'background-color: lightcoral'
+    return ''
+
+styled_df = df_comparison.style.map(
     highlight_change,
     subset=['Change']
 ).format({

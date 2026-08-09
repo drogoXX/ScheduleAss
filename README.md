@@ -9,11 +9,11 @@
 
 ## 📋 Overview
 
-The **Schedule Quality Analyzer** is a web-based application designed to automate the assessment and analysis of EPC (Engineering, Procurement, Construction) project schedules against industry best practices. It implements **DCMA 14-Point Schedule Assessment** and **GAO Schedule Assessment Guide** methodologies, providing project managers and schedulers with instant, data-driven insights into schedule quality, risks, and improvement opportunities.
+The **Schedule Quality Analyzer** is a web-based application designed to automate the assessment and analysis of EPC (Engineering, Procurement, Construction) project schedules against industry best practices. It implements the **DCMA 14-Point Schedule Assessment** methodology, providing project managers and schedulers with instant, data-driven insights into schedule quality, risks, and improvement opportunities.
 
 ## ✨ Key Features
 
-- ✅ **Automated Schedule Analysis** - DCMA 14-Point and GAO compliance checking
+- ✅ **Automated Schedule Analysis** - DCMA 14-Point compliance checking
 - 📊 **Interactive Dashboards** - Real-time metrics with visualizations
 - 📄 **Professional Reports** - Generate DOCX and Excel reports
 - 🔍 **Schedule Comparison** - Track quality improvements across versions
@@ -42,24 +42,39 @@ cd ScheduleAss
 pip install -r requirements.txt
 ```
 
-3. **Run the application**
+3. **Configure the environment**
+```bash
+cp .env.example .env
+# Set APP_ADMIN_PASSWORD to a strong password before first start
+```
+
+4. **Run the application**
 ```bash
 streamlit run app.py
 ```
 
-4. **Access the application**
+5. **Access the application**
 - Open your browser to `http://localhost:8501`
-- Login with demo credentials (see below)
+- Sign in as the administrator created on first start (see below)
 
-### Demo Credentials
+### First sign-in
 
-**Admin Account:**
-- Username: `admin`
-- Password: `admin123`
+There are no default or demo accounts. On its first start, with an empty user
+table, the application creates a single administrator:
 
-**Viewer Account:**
-- Username: `viewer`
-- Password: `viewer123`
+- If `APP_ADMIN_PASSWORD` is set, that password is used.
+- If it is not set, a strong random password is generated and written to
+  `<APP_DATA_DIR>/logs/app.log` as a `WARNING`. Read it from there, sign in, and
+  change it via **Settings -> Change Password**.
+
+Additional users are created by an admin under **Settings -> User Management**.
+
+> Earlier versions shipped with hard-coded `admin`/`admin123` and
+> `viewer`/`viewer123` accounts that were printed on the login page. They have
+> been removed. See [DEPLOYMENT.md](DEPLOYMENT.md) for the upgrade note.
+
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for production configuration, backups,
+reverse-proxy setup and the full security posture.
 
 ## 📖 User Guide
 
@@ -128,9 +143,26 @@ ScheduleAss/
 │   ├── 3_Comparison.py            # Schedule comparison
 │   ├── 4_Reports.py               # Report generation
 │   └── 5_Settings.py              # Settings and profile
+│   ├── config.py                  # Environment-driven settings
+│   ├── services.py                # Shared database/auth accessors
+│   └── logging_config.py          # Rotating file + stderr logging
+├── pages/                          # (listed above)
+├── tests/                          # pytest suite
+│   ├── conftest.py                # Fixtures; isolated temp database
+│   ├── test_parser.py             # Date handling, validation, relationships
+│   ├── test_analysis.py           # DCMA metrics, degenerate schedules
+│   ├── test_database.py           # Persistence, auth throttling, cascades
+│   ├── test_auth_manager.py       # Sessions and authorization
+│   ├── test_security.py           # Hashing and password policy
+│   ├── test_ui_safety.py          # HTML escaping of CSV-derived content
+│   ├── test_integration.py        # Full pipeline incl. report generation
+│   └── test_app_pages.py          # Page rendering and auth gates
+├── archive/dev_scripts/            # Historical debug scripts (not tests)
 ├── data/
 │   └── sample_schedule.csv        # Sample P6 export
-└── README.md                      # This file
+├── .env.example                    # Configuration template
+├── DEPLOYMENT.md                   # Production deployment guide
+└── README.md                       # This file
 ```
 
 ## 📊 Supported CSV Format
@@ -203,12 +235,21 @@ When exporting from P6:
 | **Admin** | Upload schedules, run analysis, generate reports, delete data, manage users |
 | **Viewer** | View dashboards, access reports (read-only) |
 
+### Credential handling
+
+- Passwords stored as salted PBKDF2-HMAC-SHA256 hashes (600,000 iterations)
+- Constant-time verification; hashes upgraded transparently when the cost
+  factor is raised
+- Temporary account lockout after repeated failed sign-ins
+- No default or demo accounts
+
 ### Session Management
 
-- 30-minute inactivity timeout
-- Password-based authentication
-- Session state isolation
-- Audit logging for all actions
+- 60-minute inactivity timeout
+- Session data cleared on both sign-in and sign-out, so nothing leaks between
+  accounts on a shared browser
+- Role checks enforced on every page
+- Audit logging of sign-ins, uploads, exports and deletions
 
 ## 🛠️ Technology Stack
 
@@ -216,11 +257,12 @@ When exporting from P6:
 |-----------|-----------|
 | **Frontend** | Streamlit 1.28+ |
 | **Backend** | Python 3.11+ |
-| **Database** | Session-based (upgradeable to Pocketbase) |
+| **Database** | SQLite (WAL mode, file-backed) |
 | **Data Processing** | Pandas, NumPy |
-| **Visualization** | Plotly, Altair, Matplotlib |
+| **Visualization** | Plotly |
 | **Reports** | python-docx, openpyxl |
-| **Authentication** | Streamlit Session State |
+| **Authentication** | PBKDF2-HMAC-SHA256, role-based access control |
+| **Tests** | pytest (175 tests, 90% coverage of `src/`) |
 
 ## 📈 Performance
 
@@ -292,7 +334,6 @@ CMD ["streamlit", "run", "app.py"]
 - ✅ Schedule comparison
 
 ### Phase 2 🚧 (Planned)
-- [ ] Pocketbase integration
 - [ ] Advanced user management
 - [ ] Monte Carlo risk analysis
 - [ ] Critical path visualization
@@ -332,14 +373,12 @@ For questions, issues, or suggestions:
 ## 🙏 Acknowledgments
 
 - **DCMA** - For the 14-Point Schedule Assessment framework
-- **GAO** - For Schedule Assessment Guide best practices
 - **Streamlit** - For the amazing web framework
 - **Community** - For feedback and contributions
 
 ## 📚 References
 
 - [DCMA 14-Point Assessment](https://www.dcma.mil/Portals/31/Documents/Policy/DCMA-INST-318.pdf)
-- [GAO Schedule Assessment Guide](https://www.gao.gov/products/gao-16-89g)
 - [Primavera P6 Documentation](https://docs.oracle.com/cd/E80480_01/)
 - [Streamlit Documentation](https://docs.streamlit.io/)
 

@@ -5,21 +5,20 @@ Generate and download professional reports (DOCX and Excel)
 
 import streamlit as st
 from datetime import datetime
-from src.database.db_manager import DatabaseManager
-from src.auth.auth_manager import AuthManager
+from src.services import get_auth, get_database
 from src.reports.docx_generator import DOCXGenerator
 from src.reports.excel_generator import ExcelGenerator
 from src.utils.helpers import (
     init_session_state, display_no_data_message,
-    display_success_message, display_error_message
+    display_success_message, display_error_message, report_error
 )
 
 st.set_page_config(page_title="Reports", page_icon="📄", layout="wide")
 
 # Initialize
 init_session_state()
-db = DatabaseManager()
-auth = AuthManager(db)
+db = get_database()
+auth = get_auth(db)
 
 # Check authentication
 auth.require_auth()
@@ -39,7 +38,7 @@ with st.sidebar:
 # Schedule selection
 st.markdown("### Select Schedule")
 
-schedules = st.session_state.schedules
+schedules = db.get_all_schedules()
 if not schedules:
     display_no_data_message("No schedules uploaded yet. Please upload a schedule first.")
     st.stop()
@@ -62,18 +61,8 @@ selected_schedule_id = schedule_options[selected_schedule_label]
 try:
     schedule = db.get_schedule_by_id(selected_schedule_id)
     analysis = db.get_analysis_by_schedule(selected_schedule_id)
-
-    # Debug logging
-    if analysis:
-        st.sidebar.success(f"✅ Analysis loaded: {len(str(analysis))} chars")
-    else:
-        st.sidebar.warning("⚠️ No analysis found")
-
 except Exception as e:
-    st.error(f"❌ CRITICAL ERROR loading data:")
-    st.code(str(e))
-    import traceback
-    st.code(traceback.format_exc())
+    report_error("Could not load the selected schedule.", e, logger_name="reports")
     st.stop()
 
 if not analysis:
@@ -120,8 +109,13 @@ try:
             st.write(f"**Issues Found:** {len(analysis.get('issues', []))}")
             st.write(f"**Recommendations:** {len(analysis.get('recommendations', []))}")
         except Exception as e:
-            st.error(f"Error loading analysis summary: {str(e)}")
-            st.info("This may occur if the analysis was created with an older version of the application. Please re-analyze the schedule.")
+            report_error(
+                "Could not load the analysis summary. If this analysis was "
+                "created by an older version of the application, re-analyse "
+                "the schedule.",
+                e,
+                logger_name="reports",
+            )
     
     st.markdown("---")
     
@@ -181,12 +175,12 @@ try:
                     display_success_message("DOCX report generated successfully!")
     
                     # Log action
-                    db._log_action(user['id'], 'export', schedule['id'],
+                    db.log_action(user['id'], 'export', schedule['id'],
                                  {'report_type': 'docx', 'filename': filename})
     
                 except Exception as e:
-                    display_error_message(f"Failed to generate DOCX report: {str(e)}")
-                    st.exception(e)
+                    report_error("Failed to generate the DOCX report.", e,
+                                 logger_name="reports")
     
     with col2:
         st.markdown("#### 📊 Detailed Analysis (Excel)")
@@ -238,12 +232,12 @@ try:
                     display_success_message("Excel report generated successfully!")
     
                     # Log action
-                    db._log_action(user['id'], 'export', schedule['id'],
+                    db.log_action(user['id'], 'export', schedule['id'],
                                  {'report_type': 'excel', 'filename': filename})
     
                 except Exception as e:
-                    display_error_message(f"Failed to generate Excel report: {str(e)}")
-                    st.exception(e)
+                    report_error("Failed to generate the Excel report.", e,
+                                 logger_name="reports")
     
     st.markdown("---")
     
@@ -361,47 +355,15 @@ try:
         """)
     
 except Exception as e:
-    st.error("## ❌ CRITICAL ERROR - Page Rendering Failed")
-    st.error(f"**Error Type:** {type(e).__name__}")
-    st.error(f"**Error Message:** {str(e)}")
+    report_error(
+        "The Reports page could not be displayed for this schedule.",
+        e,
+        logger_name="reports",
+    )
 
-    st.markdown("### 🔍 Debug Information")
-    st.write("**Analysis Data Check:**")
-    st.write(f"- Analysis exists: {analysis is not None}")
-    if analysis:
-        st.write(f"- Analysis keys: {list(analysis.keys())}")
-        st.write(f"- Metrics keys: {list(analysis.get('metrics', {}).keys())}")
-        if 'comprehensive_float' in analysis.get('metrics', {}):
-            cf = analysis['metrics']['comprehensive_float']
-            st.write(f"- comprehensive_float keys: {list(cf.keys())}")
-
-            # Check for problematic data types
-            import numpy as np
-            def check_types(obj, path=''):
-                issues = []
-                if isinstance(obj, dict):
-                    for k, v in obj.items():
-                        issues.extend(check_types(v, f'{path}.{k}'))
-                elif isinstance(obj, list) and len(obj) > 0:
-                    issues.extend(check_types(obj[0], f'{path}[0]'))
-                elif isinstance(obj, (np.integer, np.floating)):
-                    issues.append(f'{path}: {type(obj).__name__}')
-                return issues
-
-            type_issues = check_types(cf, 'comprehensive_float')
-            if type_issues:
-                st.warning(f"⚠️ Found {len(type_issues)} numpy types (may cause serialization issues)")
-                for issue in type_issues[:10]:
-                    st.code(issue)
-
-    st.markdown("### 📋 Full Traceback")
-    import traceback
-    st.code(traceback.format_exc())
-
-    st.markdown("### 💡 Possible Solutions")
     st.info("""
-    1. **Re-analyze the schedule** - Go to Upload Schedule and click "Analyze Schedule" again
-    2. **Clear browser cache** - Refresh with Ctrl+Shift+R or Cmd+Shift+R
-    3. **Try a different browser** - Sometimes browser state causes issues
-    4. **Contact support** - Share the error details above
+    **What to try:**
+    1. **Re-analyse the schedule** - go to Upload Schedule and run the analysis again
+    2. **Refresh the page** - Ctrl+Shift+R (Windows) or Cmd+Shift+R (Mac)
+    3. **Contact support** - quote the error reference shown above
     """)

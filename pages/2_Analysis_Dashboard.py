@@ -7,19 +7,18 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from src.database.db_manager import DatabaseManager
-from src.auth.auth_manager import AuthManager
+from src.services import get_auth, get_database
 from src.utils.helpers import (
     init_session_state, display_health_score, display_issue_card,
-    display_recommendation_card, display_no_data_message
+    display_recommendation_card, display_no_data_message, report_error
 )
 
 st.set_page_config(page_title="Analysis Dashboard", page_icon="📊", layout="wide")
 
 # Initialize
 init_session_state()
-db = DatabaseManager()
-auth = AuthManager(db)
+db = get_database()
+auth = get_auth(db)
 
 # Check authentication
 auth.require_auth()
@@ -38,7 +37,7 @@ with st.sidebar:
 # Schedule selection
 st.markdown("### Select Schedule")
 
-schedules = st.session_state.schedules
+schedules = db.get_all_schedules()
 if not schedules:
     display_no_data_message("No schedules uploaded yet. Please upload a schedule first.")
     st.stop()
@@ -92,13 +91,54 @@ with tab1:
         health_score = analysis['health_score']
         # Get full metrics
         perf_metrics = analysis.get('performance_metrics', {})
-        if perf_metrics:
-            health_data = perf_metrics.get('health_score', {})
-            rating = health_data.get('rating', 'Unknown')
-        else:
-            rating = 'Unknown'
+        health_data = perf_metrics.get('health_score', {}) if perf_metrics else {}
+        rating = health_data.get('rating', 'Unknown')
 
         display_health_score(health_score, rating)
+
+        # Any ceiling or data-sufficiency gate that limited the score must be
+        # stated, otherwise the number looks arbitrary.
+        for cap in health_data.get('caps', []):
+            st.warning(f"⚠️ {cap}")
+
+        # The score is a weighted average of DCMA checks; show the workings so
+        # it can be defended line by line rather than taken on trust.
+        components = health_data.get('components', [])
+        if components:
+            with st.expander("🔬 How this score is calculated"):
+                st.caption(
+                    "Weighted average of DCMA 14-Point checks. Each check is "
+                    "scored 100 at or better than its DCMA target, falling "
+                    "linearly to 0 at the bound shown. Checks with no data are "
+                    "marked n/a and excluded, and the remaining weights are "
+                    "renormalised."
+                )
+                st.dataframe(
+                    [
+                        {
+                            "DCMA": component.get('dcma_point') or '-',
+                            "Check": component['label'],
+                            "Measured": (
+                                "n/a" if component['value'] is None
+                                else f"{component['value']}{component['unit']}"
+                            ),
+                            "Target": component['target'],
+                            "Weight": component['weight'],
+                            "Score": (
+                                "n/a" if component['score'] is None
+                                else f"{component['score']:.0f}/100"
+                            ),
+                        }
+                        for component in components
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.caption(
+                    "Thresholds follow the DCMA 14-Point Assessment. The "
+                    "weights are this application's assessment of relative "
+                    "severity, not a DCMA-defined figure."
+                )
 
     with col2:
         # Key metrics
@@ -650,19 +690,19 @@ with tab3:
         try:
             distribution = calculate_float_distribution(activities)
         except Exception as e:
-            st.error(f"Error calculating float distribution: {str(e)}")
+            report_error("Float distribution could not be calculated.", e, logger_name="dashboard")
             distribution = {}
 
         try:
             float_by_wbs = calculate_float_by_wbs(activities)
         except Exception as e:
-            st.error(f"Error calculating float by WBS: {str(e)}")
+            report_error("Float by WBS could not be calculated.", e, logger_name="dashboard")
             float_by_wbs = {}
 
         try:
             negative_activities = get_negative_float_activities(activities)
         except Exception as e:
-            st.error(f"Error getting negative float activities: {str(e)}")
+            report_error("Negative float activities could not be listed.", e, logger_name="dashboard")
             negative_activities = []
 
         if not float_data or 'error' in float_data:
@@ -1036,14 +1076,13 @@ with tab3:
                 """)
 
     except Exception as e:
-        st.error("⚠️ An error occurred in Float Analysis")
-        st.error(f"Error details: {str(e)}")
-        st.info("Please try refreshing the page or re-uploading the schedule. If the problem persists, contact support.")
-
-        # Show detailed traceback in an expander for debugging
-        import traceback
-        with st.expander("🔧 Technical Details (for debugging)"):
-            st.code(traceback.format_exc())
+        report_error(
+            "Float Analysis could not be displayed for this schedule. "
+            "Try re-uploading the schedule; if the problem persists, quote the "
+            "reference below to your administrator.",
+            e,
+            logger_name="dashboard",
+        )
 
 # ============================================================================
 # Tab 4: WBS Analysis
@@ -1437,14 +1476,13 @@ with tab4:
                 """)
 
     except Exception as e:
-        st.error("⚠️ An error occurred in WBS Analysis")
-        st.error(f"Error details: {str(e)}")
-        st.info("Please try refreshing the page or re-uploading the schedule. If the problem persists, contact support.")
-
-        # Show detailed traceback in an expander for debugging
-        import traceback
-        with st.expander("🔧 Technical Details (for debugging)"):
-            st.code(traceback.format_exc())
+        report_error(
+            "WBS Analysis could not be displayed for this schedule. "
+            "Try re-uploading the schedule; if the problem persists, quote the "
+            "reference below to your administrator.",
+            e,
+            logger_name="dashboard",
+        )
 
 # ============================================================================
 # Tab 5: Issues

@@ -6,7 +6,22 @@
 | **Document Version** | 1.0 |
 | **Date** | November 2, 2025 |
 | **Product Name** | Schedule Quality Analyzer |
-| **Tech Stack** | Streamlit, Python, Pocketbase, GitHub |
+| **Tech Stack** | Streamlit, Python, SQLite, GitHub |
+
+---
+
+> **Implementation status note**
+>
+> This document states the original requirements. Two of them differ from what
+> the application actually does, and are recorded here so the baseline is not
+> mistaken for a description of delivered functionality:
+>
+> - **GAO Schedule Assessment Guide — NOT IMPLEMENTED.** Only the DCMA 14-Point
+>   Assessment is implemented. No GAO-specific check exists in the codebase.
+>   References to GAO below are unbuilt requirements, not delivered features.
+>   All GAO compliance claims have been removed from the application UI, the
+>   generated reports and the README.
+> - **Pocketbase — NOT USED.** Persistence is SQLite. See `DEPLOYMENT.md`.
 
 ---
 
