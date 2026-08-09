@@ -7,13 +7,22 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from src.services import get_auth, get_database
+from src.services import get_auth, get_database, load_analysis, load_schedule
+from src.ui.charts import FLOAT_BUCKET_COLORS
+from src.ui.diagnostics import timed
+from src.ui.theme import (
+    CHART_SCALE_CRITICALITY, CHART_SCALE_DIVERGING, CHART_SEQUENCE, COLORS,
+    COLUMN_FORMAT, RATING_COLORS, app_header, apply_chart_theme, fmt_count,
+    fmt_days, fmt_index, fmt_pct, fmt_ratio, fmt_score, inject_css, kpi_card,
+    section_divider, status_badge, threshold_status,
+)
 from src.utils.helpers import (
     init_session_state, display_health_score, display_issue_card,
     display_recommendation_card, display_no_data_message, report_error
 )
 
 st.set_page_config(page_title="Analysis Dashboard", page_icon="📊", layout="wide")
+inject_css("Analysis Dashboard")
 
 # Initialize
 init_session_state()
@@ -23,16 +32,32 @@ auth = get_auth(db)
 # Check authentication
 auth.require_auth()
 
-st.title("📊 Analysis Dashboard")
+app_header(
+    "📊 Analysis Dashboard",
+    "DCMA 14-point assessment, float analysis and WBS breakdown for a selected schedule",
+)
+
+
+def _float_variant(status: str) -> str:
+    """Map the analyser's good/warning/* status vocabulary to a badge variant."""
+    return {'good': 'success', 'warning': 'warning'}.get(str(status).lower(), 'danger')
+
+
+def _rating_variant(rating: str) -> str:
+    """Map a health-score rating to a badge variant."""
+    return {
+        'excellent': 'success', 'good': 'success', 'fair': 'warning',
+        'poor': 'warning', 'critical': 'danger',
+    }.get(str(rating).lower(), 'neutral')
 
 # User info in sidebar
 with st.sidebar:
-    st.markdown("---")
+    st.divider()
     user = auth.get_current_user()
     if user:
         st.markdown(f"**User:** {user['username']}")
         st.markdown(f"**Role:** {user['role'].capitalize()}")
-    st.markdown("---")
+    st.divider()
 
 # Schedule selection
 st.markdown("### Select Schedule")
@@ -56,8 +81,10 @@ selected_schedule_label = st.selectbox(
 )
 
 selected_schedule_id = schedule_options[selected_schedule_label]
-schedule = db.get_schedule_by_id(selected_schedule_id)
-analysis = db.get_analysis_by_schedule(selected_schedule_id)
+with timed("Dashboard: load schedule"):
+    schedule = load_schedule(selected_schedule_id)
+with timed("Dashboard: load analysis"):
+    analysis = load_analysis(selected_schedule_id)
 
 if not analysis:
     display_no_data_message("No analysis results available for this schedule.")
@@ -126,7 +153,7 @@ with tab1:
                             "Weight": component['weight'],
                             "Score": (
                                 "n/a" if component['score'] is None
-                                else f"{component['score']:.0f}/100"
+                                else fmt_score(component['score'])
                             ),
                         }
                         for component in components
@@ -152,11 +179,20 @@ with tab1:
                 cpli = analysis['performance_metrics'].get('cpli', {})
                 cpli_value = cpli.get('value', 0)
                 cpli_status = cpli.get('status', 'unknown')
+                # The target belongs in help/badge, not in delta: a delta string
+                # renders as a green up-arrow and reads as an improvement that
+                # was never measured.
                 st.metric(
                     "CPLI",
-                    f"{cpli_value:.3f}",
-                    delta="Target: ≥0.95",
-                    help="Critical Path Length Index"
+                    fmt_index(cpli_value),
+                    help="Critical Path Length Index. Target: ≥ 0.95"
+                )
+                st.markdown(
+                    status_badge(
+                        "Target ≥ 0.95",
+                        threshold_status(cpli_value, 0.95, lower_is_better=False),
+                    ),
+                    unsafe_allow_html=True,
                 )
 
                 # BEI
@@ -164,21 +200,27 @@ with tab1:
                 bei_value = bei.get('value', 0)
                 st.metric(
                     "BEI",
-                    f"{bei_value:.3f}",
-                    delta="Target: ≥0.95",
-                    help="Baseline Execution Index"
+                    fmt_index(bei_value),
+                    help="Baseline Execution Index. Target: ≥ 0.95"
+                )
+                st.markdown(
+                    status_badge(
+                        "Target ≥ 0.95",
+                        threshold_status(bei_value, 0.95, lower_is_better=False),
+                    ),
+                    unsafe_allow_html=True,
                 )
 
         with col2_2:
             # Total activities
             total_activities = schedule['schedule_data']['total_activities']
-            st.metric("Total Activities", total_activities)
+            st.metric("Total Activities", fmt_count(total_activities))
 
             # Issues count
             issues_count = len(analysis['issues'])
-            st.metric("Issues Identified", issues_count)
+            st.metric("Issues Identified", fmt_count(issues_count))
 
-    st.markdown("---")
+    section_divider()
 
     # Quick stats
     st.markdown("### Key Statistics")
@@ -187,24 +229,25 @@ with tab1:
 
     with col1:
         neg_lags = metrics.get('negative_lags', {}).get('count', 0)
-        st.metric("Negative Lags", neg_lags, help="Target: 0")
+        st.metric("Negative Lags", fmt_count(neg_lags), help="Target: 0")
 
     with col2:
         pos_lags_pct = metrics.get('positive_lags', {}).get('percentage', 0)
-        st.metric("Positive Lags %", f"{pos_lags_pct:.1f}%", help="Target: ≤5%")
+        st.metric("Positive Lags %", fmt_pct(pos_lags_pct), help="Target: ≤5%")
 
     with col3:
         # Show total constrained activities
         constraints_data = metrics.get('constraints', {})
         total_constrained_pct = constraints_data.get('total_percentage', 0)
-        st.metric("Activities with Constraints", f"{total_constrained_pct:.1f}%",
+        st.metric("Activities with Constraints", fmt_pct(total_constrained_pct),
                  help="All constraint types (should be minimized and justified)")
 
     with col4:
         missing_logic = metrics.get('missing_logic', {}).get('count', 0)
-        st.metric("Missing Logic", missing_logic, help="Target: 0 - Total unique activities with missing logic")
+        st.metric("Missing Logic", fmt_count(missing_logic),
+                 help="Target: 0 - Total unique activities with missing logic")
 
-    st.markdown("---")
+    section_divider()
 
     # Missing Logic Breakdown
     if missing_logic > 0:
@@ -215,22 +258,22 @@ with tab1:
 
         with col_ml1:
             total_count = missing_logic_data.get('count', 0)
-            st.metric("Total Missing Logic", total_count,
+            st.metric("Total Missing Logic", fmt_count(total_count),
                      help="Total unique activities with missing predecessor and/or successor")
 
         with col_ml2:
             pred_only = missing_logic_data.get('missing_predecessor_only_count', 0)
-            st.metric("Missing Predecessor Only", pred_only,
+            st.metric("Missing Predecessor Only", fmt_count(pred_only),
                      help="Activities missing only predecessors")
 
         with col_ml3:
             succ_only = missing_logic_data.get('missing_successor_only_count', 0)
-            st.metric("Missing Successor Only", succ_only,
+            st.metric("Missing Successor Only", fmt_count(succ_only),
                      help="Activities missing only successors")
 
         with col_ml4:
             both_count = missing_logic_data.get('missing_both_count', 0)
-            st.metric("Missing Both", both_count,
+            st.metric("Missing Both", fmt_count(both_count),
                      help="Activities missing both predecessors and successors")
 
         # Add validation note
@@ -259,9 +302,10 @@ with tab1:
             values=list(status_data.values()),
             names=list(status_data.keys()),
             title="Activity Status Breakdown",
-            color_discrete_sequence=px.colors.qualitative.Set3
+            color_discrete_sequence=CHART_SEQUENCE
         )
-        st.plotly_chart(fig, use_container_width=True)
+        fig.update_traces(textinfo='label+percent')
+        st.plotly_chart(apply_chart_theme(fig), use_container_width=True)
     else:
         st.info("No status data available")
 
@@ -283,19 +327,21 @@ with tab2:
             title={'text': "Negative Lags"},
             gauge={
                 'axis': {'range': [0, 50]},
-                'bar': {'color': "red" if neg_lags_count > 0 else "green"},
+                'bar': {'color': COLORS['danger'] if neg_lags_count > 0
+                        else COLORS['success']},
                 'steps': [
-                    {'range': [0, 0], 'color': "lightgreen"},
-                    {'range': [0, 50], 'color': "lightcoral"}
+                    {'range': [0, 0], 'color': COLORS['surface']},
+                    {'range': [0, 50], 'color': COLORS['surface']}
                 ],
+                'bordercolor': COLORS['border'],
                 'threshold': {
-                    'line': {'color': "red", 'width': 4},
+                    'line': {'color': COLORS['danger'], 'width': 4},
                     'thickness': 0.75,
                     'value': 0
                 }
             }
         ))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(apply_chart_theme(fig, height=300), use_container_width=True)
 
     with col2:
         # Positive lags chart
@@ -305,23 +351,26 @@ with tab2:
             value=pos_lags_pct,
             title={'text': "Positive Lags (%)"},
             delta={'reference': 5},
+            number={'suffix': "%"},
             gauge={
-                'axis': {'range': [0, 20]},
-                'bar': {'color': "green" if pos_lags_pct <= 5 else "orange"},
+                'axis': {'range': [0, 20], 'ticksuffix': "%"},
+                'bar': {'color': COLORS['success'] if pos_lags_pct <= 5
+                        else COLORS['warning']},
                 'steps': [
-                    {'range': [0, 5], 'color': "lightgreen"},
-                    {'range': [5, 20], 'color': "lightyellow"}
+                    {'range': [0, 5], 'color': COLORS['surface']},
+                    {'range': [5, 20], 'color': COLORS['surface_alt']}
                 ],
+                'bordercolor': COLORS['border'],
                 'threshold': {
-                    'line': {'color': "red", 'width': 4},
+                    'line': {'color': COLORS['danger'], 'width': 4},
                     'thickness': 0.75,
                     'value': 5
                 }
             }
         ))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(apply_chart_theme(fig, height=300), use_container_width=True)
 
-    st.markdown("---")
+    section_divider()
 
     # Duration Analysis
     st.markdown("### Duration Analysis")
@@ -336,22 +385,27 @@ with tab2:
         milestones_excluded = avg_duration_data.get('milestones_excluded', 0)
         source_column = avg_duration_data.get('source_column', 'Unknown')
 
-        st.metric("Average Duration", f"{avg_duration:.1f} days",
+        st.metric("Average Duration", fmt_days(avg_duration),
                  help=f"Based on 'At Completion Duration' from P6")
-        st.metric("Median Duration", f"{median_duration:.1f} days")
+        st.metric("Median Duration", fmt_days(median_duration))
 
         # Show analysis details
         if total_analyzed > 0:
-            st.info(f"ℹ️ Analyzed {total_analyzed} activities (excluded {milestones_excluded} milestones)")
+            st.info(
+                f"ℹ️ Analyzed {fmt_count(total_analyzed)} activities "
+                f"(excluded {fmt_count(milestones_excluded)} milestones)"
+            )
 
         # Show error if column not found
         if 'error' in avg_duration_data:
             st.error(f"⚠️ {avg_duration_data['error']}")
 
         long_durations = metrics.get('long_durations', {})
-        st.metric("Activities >20 days", long_durations.get('count_over_20_days', 0),
+        st.metric("Activities >20 days",
+                 fmt_count(long_durations.get('count_over_20_days', 0)),
                  help="Excluding milestones")
-        st.metric("Activities >5 months", long_durations.get('count_over_5_months', 0),
+        st.metric("Activities >5 months",
+                 fmt_count(long_durations.get('count_over_5_months', 0)),
                  help="Excluding milestones")
 
     with col2:
@@ -365,15 +419,25 @@ with tab2:
                     durations,
                     nbins=30,
                     title="Activity Duration Distribution",
-                    labels={'value': 'Duration (days)', 'count': 'Frequency'}
+                    labels={'value': 'Duration (days)', 'count': 'Frequency'},
+                    color_discrete_sequence=[COLORS['primary']]
                 )
-                fig.add_vline(x=20, line_dash="dash", line_color="orange",
+                fig.add_vline(x=20, line_dash="dash",
+                             line_color=COLORS['warning'],
                              annotation_text="20 days")
-                fig.add_vline(x=150, line_dash="dash", line_color="red",
+                fig.add_vline(x=150, line_dash="dash",
+                             line_color=COLORS['danger'],
                              annotation_text="5 months")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(
+                    apply_chart_theme(
+                        fig, showlegend=False,
+                        xaxis_title="Duration (days)", yaxis_title="Activities",
+                        xaxis_format="count", yaxis_format="count",
+                    ),
+                    use_container_width=True,
+                )
 
-    st.markdown("---")
+    section_divider()
 
     # Relationship Types
     st.markdown("### Relationship Types Distribution")
@@ -381,15 +445,23 @@ with tab2:
     rel_types = metrics.get('relationship_types', {})
     if rel_types.get('total', 0) > 0:
         percentages = rel_types.get('percentages', {})
+        # Single-colour bars: colouring by relationship type only produced a
+        # legend that repeated the x-axis tick labels.
         fig = px.bar(
             x=list(percentages.keys()),
             y=list(percentages.values()),
             title="Relationship Type Breakdown",
             labels={'x': 'Relationship Type', 'y': 'Percentage (%)'},
-            color=list(percentages.keys()),
-            color_discrete_sequence=px.colors.qualitative.Pastel
+            color_discrete_sequence=[COLORS['primary']]
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(
+            apply_chart_theme(
+                fig, showlegend=False,
+                xaxis_title="Relationship Type", yaxis_title="Share of relationships",
+                yaxis_format="pct",
+            ),
+            use_container_width=True,
+        )
     else:
         st.warning("⚠️ No relationship data available")
         st.markdown("""
@@ -414,10 +486,14 @@ with tab2:
         # Summary metrics
         col1, col2, col3, col4 = st.columns(4)
 
+        # The share of activities is a secondary figure, not a change over time.
+        # Passing it as `delta` coloured it green or red at random; it belongs
+        # in a caption underneath.
         with col1:
             total_count = constraints_data.get('total_count', 0)
             total_pct = constraints_data.get('total_percentage', 0)
-            st.metric("Total Constrained", f"{total_count}", f"{total_pct:.1f}%")
+            st.metric("Total Constrained", fmt_count(total_count))
+            st.caption(f"{fmt_pct(total_pct)} of activities")
 
         by_category = constraints_data.get('by_category', {})
 
@@ -425,24 +501,27 @@ with tab2:
             hard_data = by_category.get('Hard', {})
             hard_count = hard_data.get('count', 0)
             hard_pct = hard_data.get('percentage', 0)
-            st.metric("Hard Constraints", f"{hard_count}", f"{hard_pct:.1f}%",
+            st.metric("Hard Constraints", fmt_count(hard_count),
                      help="Must/On dates - Minimize and justify")
+            st.caption(f"{fmt_pct(hard_pct)} of activities")
 
         with col3:
             flex_data = by_category.get('Flexible', {})
             flex_count = flex_data.get('count', 0)
             flex_pct = flex_data.get('percentage', 0)
-            st.metric("Flexible Constraints", f"{flex_count}", f"{flex_pct:.1f}%",
+            st.metric("Flexible Constraints", fmt_count(flex_count),
                      help="On or Before/After - Use sparingly")
+            st.caption(f"{fmt_pct(flex_pct)} of activities")
 
         with col4:
             sched_data = by_category.get('Schedule-Driven', {})
             sched_count = sched_data.get('count', 0)
             sched_pct = sched_data.get('percentage', 0)
-            st.metric("Schedule-Driven", f"{sched_count}", f"{sched_pct:.1f}%",
+            st.metric("Schedule-Driven", fmt_count(sched_count),
                      help="ALAP/ASAP - Generally acceptable")
+            st.caption(f"{fmt_pct(sched_pct)} of activities")
 
-        st.markdown("---")
+        section_divider()
 
         # Breakdown by constraint type
         st.markdown("#### Constraint Type Breakdown")
@@ -464,9 +543,10 @@ with tab2:
                         values=counts,
                         names=categories,
                         title="Constraints by Category",
-                        color_discrete_sequence=px.colors.qualitative.Set2
+                        color_discrete_sequence=CHART_SEQUENCE
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    fig.update_traces(textinfo='label+percent')
+                    st.plotly_chart(apply_chart_theme(fig), use_container_width=True)
 
         with col2:
             # Guidance and recommendations
@@ -728,24 +808,13 @@ with tab3:
             critical_status = critical_data.get('status', 'unknown')
 
             with col1:
-                if critical_status == 'good':
-                    status_icon = "✓"
-                    status_color = "green"
-                elif critical_status == 'warning':
-                    status_icon = "⚠"
-                    status_color = "orange"
-                else:
-                    status_icon = "✗"
-                    status_color = "red"
-
-                st.markdown(f"""
-                <div style="padding: 10px; border-left: 4px solid {status_color}; background-color: #f0f2f6; border-radius: 5px;">
-                    <h4 style="margin: 0; color: {status_color};">{status_icon} Critical Path</h4>
-                    <h2 style="margin: 5px 0;">{critical_count}</h2>
-                    <p style="margin: 0; font-size: 14px;">{critical_pct:.1f}% of activities</p>
-                    <p style="margin: 0; font-size: 12px; color: gray;">Target: 5-15%</p>
-                </div>
-                """, unsafe_allow_html=True)
+                kpi_card(
+                    "Critical Path",
+                    fmt_count(critical_count),
+                    subtitle=f"{fmt_pct(critical_pct)} of activities",
+                    target="Target: 5-15%",
+                    status=_float_variant(critical_status),
+                )
 
             # KPI 2: Near-Critical
             near_critical_data = float_data.get('near_critical', {})
@@ -753,14 +822,13 @@ with tab3:
             near_critical_pct = near_critical_data.get('percentage', 0)
 
             with col2:
-                st.markdown(f"""
-                <div style="padding: 10px; border-left: 4px solid orange; background-color: #f0f2f6; border-radius: 5px;">
-                    <h4 style="margin: 0; color: orange;">⚠ Near-Critical</h4>
-                    <h2 style="margin: 5px 0;">{near_critical_count}</h2>
-                    <p style="margin: 0; font-size: 14px;">{near_critical_pct:.1f}% of activities</p>
-                    <p style="margin: 0; font-size: 12px; color: gray;">Float: 1-10 days</p>
-                </div>
-                """, unsafe_allow_html=True)
+                kpi_card(
+                    "Near-Critical",
+                    fmt_count(near_critical_count),
+                    subtitle=f"{fmt_pct(near_critical_pct)} of activities",
+                    target="Float: 1-10 days",
+                    status="warning",
+                )
 
             # KPI 3: Negative Float
             negative_data = float_data.get('negative_float', {})
@@ -769,21 +837,13 @@ with tab3:
             negative_status = negative_data.get('status', 'unknown')
 
             with col3:
-                if negative_status == 'good':
-                    status_icon = "✓"
-                    status_color = "green"
-                else:
-                    status_icon = "✗"
-                    status_color = "red"
-
-                st.markdown(f"""
-                <div style="padding: 10px; border-left: 4px solid {status_color}; background-color: #f0f2f6; border-radius: 5px;">
-                    <h4 style="margin: 0; color: {status_color};">{status_icon} Behind Schedule</h4>
-                    <h2 style="margin: 5px 0;">{negative_count}</h2>
-                    <p style="margin: 0; font-size: 14px;">{negative_pct:.1f}% of activities</p>
-                    <p style="margin: 0; font-size: 12px; color: gray;">Target: 0</p>
-                </div>
-                """, unsafe_allow_html=True)
+                kpi_card(
+                    "Behind Schedule",
+                    fmt_count(negative_count),
+                    subtitle=f"{fmt_pct(negative_pct)} of activities",
+                    target="Target: 0",
+                    status="success" if negative_status == 'good' else "danger",
+                )
 
             # KPI 4: Float Ratio
             ratio_data = float_data.get('float_ratio', {})
@@ -791,24 +851,13 @@ with tab3:
             ratio_status = ratio_data.get('status', 'unknown')
 
             with col4:
-                if ratio_status == 'good':
-                    status_icon = "✓"
-                    status_color = "green"
-                elif ratio_status == 'warning':
-                    status_icon = "⚠"
-                    status_color = "orange"
-                else:
-                    status_icon = "✗"
-                    status_color = "red"
-
-                st.markdown(f"""
-                <div style="padding: 10px; border-left: 4px solid {status_color}; background-color: #f0f2f6; border-radius: 5px;">
-                    <h4 style="margin: 0; color: {status_color};">{status_icon} Float Ratio</h4>
-                    <h2 style="margin: 5px 0;">{ratio_value:.2f}</h2>
-                    <p style="margin: 0; font-size: 14px;">Avg Float / Avg Duration</p>
-                    <p style="margin: 0; font-size: 12px; color: gray;">Target: 0.5-1.5</p>
-                </div>
-                """, unsafe_allow_html=True)
+                kpi_card(
+                    "Float Ratio",
+                    fmt_ratio(ratio_value),
+                    subtitle="Avg Float / Avg Duration",
+                    target="Target: 0.5-1.5",
+                    status=_float_variant(ratio_status),
+                )
 
             st.markdown("---")
 
@@ -830,27 +879,26 @@ with tab3:
                         distribution.get('low_risk', 0),
                         distribution.get('comfortable', 0)
                     ]
-                    colors = ['#e74c3c', '#f39c12', '#f1c40f', '#2ecc71', '#27ae60']
-
                     fig = go.Figure(data=[
                         go.Bar(
                             x=categories,
                             y=counts,
-                            marker_color=colors,
-                            text=counts,
+                            marker_color=FLOAT_BUCKET_COLORS,
+                            text=[fmt_count(c) for c in counts],
                             textposition='auto',
-                            hovertemplate='<b>%{x}</b><br>Count: %{y}<extra></extra>'
+                            hovertemplate='<b>%{x}</b><br>Count: %{y:,}<extra></extra>'
                         )
                     ])
 
-                    fig.update_layout(
-                        xaxis_title="Float Range (days)",
-                        yaxis_title="Number of Activities",
-                        showlegend=False,
-                        height=400
+                    st.plotly_chart(
+                        apply_chart_theme(
+                            fig, showlegend=False,
+                            xaxis_title="Float Range (days)",
+                            yaxis_title="Number of Activities",
+                            yaxis_format="count",
+                        ),
+                        use_container_width=True,
                     )
-
-                    st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.info("No distribution data available")
 
@@ -866,26 +914,23 @@ with tab3:
                         distribution.get('low_risk', 0),
                         distribution.get('comfortable', 0)
                     ]
-                    colors_donut = ['#e74c3c', '#f39c12', '#3498db', '#2ecc71']
-
+                    # Same buckets as the histogram beside it, minus 'Negative',
+                    # so the shared colours must line up: skip the first entry.
                     fig = go.Figure(data=[
                         go.Pie(
                             labels=labels,
                             values=values,
                             hole=0.4,
-                            marker=dict(colors=colors_donut),
+                            marker=dict(colors=FLOAT_BUCKET_COLORS[1:]),
                             textinfo='label+percent',
-                            hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>'
+                            hovertemplate='<b>%{label}</b><br>Count: %{value:,}<br>Percentage: %{percent}<extra></extra>'
                         )
                     ])
 
-                    fig.update_layout(
-                        showlegend=True,
-                        height=400,
-                        legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05)
+                    st.plotly_chart(
+                        apply_chart_theme(fig, showlegend=True),
+                        use_container_width=True,
                     )
-
-                    st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.info("No distribution data available")
 
@@ -903,15 +948,14 @@ with tab3:
                 median_float = stats.get('median', 0)
                 std_float = stats.get('std_dev', 0)
 
-                st.metric("Mean Float", f"{mean_float:.1f} days")
-                st.metric("Median Float", f"{median_float:.1f} days")
-                st.metric("Std Deviation", f"{std_float:.1f} days")
+                st.metric("Mean Float", fmt_days(mean_float))
+                st.metric("Median Float", fmt_days(median_float))
+                st.metric("Std Deviation", fmt_days(std_float))
 
                 # Most negative float
                 most_negative = float_data.get('most_negative', 0)
                 if most_negative < 0:
-                    st.metric("Worst Delay", f"{most_negative:.1f} days",
-                             delta=None,
+                    st.metric("Worst Delay", fmt_days(most_negative),
                              help="Most negative float value")
 
                 # Excessive float
@@ -919,9 +963,9 @@ with tab3:
                 excessive_count = excessive_data.get('count', 0)
                 if excessive_count > 0:
                     excessive_pct = excessive_data.get('percentage', 0)
-                    st.metric("Excessive Float", f"{excessive_count}",
-                             delta=f"{excessive_pct:.1f}%",
+                    st.metric("Excessive Float", fmt_count(excessive_count),
                              help="Activities with float >50% of project duration")
+                    st.caption(f"{fmt_pct(excessive_pct)} of activities")
 
             with col2:
                 # Chart 3: Float Box Plot by WBS Code
@@ -929,40 +973,52 @@ with tab3:
 
                 # float_by_wbs is calculated at top of tab from activities
                 if float_by_wbs and len(float_by_wbs) > 0:
-                    # Prepare data for box plot
-                    wbs_codes = list(float_by_wbs.keys())
-                    float_values = list(float_by_wbs.values())
+                    # One box per WBS code becomes unreadable on a real
+                    # schedule, so show only the busiest codes and say so.
+                    MAX_WBS_BOXES = 15
+                    populated = [
+                        (wbs, floats) for wbs, floats in float_by_wbs.items() if floats
+                    ]
+                    populated.sort(key=lambda item: len(item[1]), reverse=True)
+                    shown = populated[:MAX_WBS_BOXES]
+                    hidden_count = len(populated) - len(shown)
 
                     fig = go.Figure()
-                    traces_added = 0
-
-                    for wbs, floats in zip(wbs_codes, float_values):
-                        if floats:  # Only add if there are float values
-                            fig.add_trace(go.Box(
-                                y=floats,
-                                name=str(wbs),
-                                boxmean='sd',  # Show mean and standard deviation
-                                hovertemplate='<b>WBS: %{fullData.name}</b><br>Float: %{y:.1f} days<extra></extra>'
-                            ))
-                            traces_added += 1
+                    for wbs, floats in shown:
+                        fig.add_trace(go.Box(
+                            y=floats,
+                            name=str(wbs),
+                            marker_color=COLORS['primary'],
+                            line_color=COLORS['primary'],
+                            boxmean='sd',  # Show mean and standard deviation
+                            hovertemplate='<b>WBS: %{fullData.name}</b><br>Float: %{y:.1f} days<extra></extra>'
+                        ))
 
                     # Only display chart if traces were actually added
-                    if traces_added > 0:
-                        fig.update_layout(
+                    if shown:
+                        apply_chart_theme(
+                            fig, showlegend=False,
                             xaxis_title="WBS Code",
                             yaxis_title="Total Float (days)",
-                            showlegend=False,
-                            height=400,
-                            xaxis={'categoryorder': 'total descending'}
+                            yaxis_format="days",
+                            xaxis={'categoryorder': 'total descending'},
                         )
 
                         # Add horizontal lines for thresholds
-                        fig.add_hline(y=0, line_dash="dash", line_color="red",
+                        fig.add_hline(y=0, line_dash="dash",
+                                     line_color=COLORS['danger'],
                                      annotation_text="Critical", annotation_position="right")
-                        fig.add_hline(y=10, line_dash="dash", line_color="orange",
+                        fig.add_hline(y=10, line_dash="dash",
+                                     line_color=COLORS['warning'],
                                      annotation_text="Near-Critical", annotation_position="right")
 
                         st.plotly_chart(fig, use_container_width=True)
+                        if hidden_count > 0:
+                            st.caption(
+                                f"Showing the {len(shown)} WBS codes with the most "
+                                f"activities; {fmt_count(hidden_count)} further "
+                                f"code(s) not plotted."
+                            )
                     else:
                         # No traces were added - show debug info
                         st.info("⚠️ WBS codes found but no valid float data to display")
@@ -1017,7 +1073,7 @@ with tab3:
                         column_config={
                             "activity_id": st.column_config.TextColumn("Activity ID"),
                             "activity_name": st.column_config.TextColumn("Activity Name", width="large"),
-                            "total_float": st.column_config.NumberColumn("Total Float (days)", format="%.1f"),
+                            "total_float": st.column_config.NumberColumn("Total Float (days)", format=COLUMN_FORMAT["days"]),
                             "status": st.column_config.TextColumn("Status")
                         }
                     )
@@ -1104,20 +1160,22 @@ with tab4:
             col1, col2, col3, col4 = st.columns(4)
 
             with col1:
-                st.metric("Total Activities", wbs_analysis['total_activities'])
+                st.metric("Total Activities",
+                          fmt_count(wbs_analysis['total_activities']))
 
             with col2:
-                st.metric("With WBS Codes", wbs_analysis['activities_with_wbs'])
+                st.metric("With WBS Codes",
+                          fmt_count(wbs_analysis['activities_with_wbs']))
 
             with col3:
                 avg_depth = wbs_analysis.get('avg_depth', 0)
-                st.metric("Avg WBS Depth", f"{avg_depth:.1f}")
+                st.metric("Avg WBS Depth", fmt_days(avg_depth, unit=False))
 
             with col4:
                 max_depth = wbs_analysis.get('max_depth', 0)
-                st.metric("Max WBS Depth", max_depth)
+                st.metric("Max WBS Depth", fmt_count(max_depth))
 
-            st.markdown("---")
+            section_divider()
 
             # Advanced WBS Hierarchy Visualizations
             st.markdown("### 🎨 WBS Hierarchy Visualization")
@@ -1146,21 +1204,21 @@ with tab4:
 
                                 # Get health score for this path
                                 health_score = 50  # Default
-                                health_color = '#f39c12'  # Default orange
+                                health_color = RATING_COLORS['Fair']
 
                                 # Try to get health score from level1 stats
                                 if level1_name and level1_name in level1:
                                     level1_stats = level1[level1_name]
                                     if 'health_score' in level1_stats:
                                         health_score = level1_stats['health_score'].get('score', 50)
-                                        health_color = level1_stats['health_score'].get('color', '#f39c12')
+                                        health_color = level1_stats['health_score'].get('color', RATING_COLORS['Fair'])
 
                                 # Try to get health score from level2 stats (more specific)
                                 if level2_name and level2_name in level2:
                                     level2_stats = level2[level2_name]
                                     if 'health_score' in level2_stats:
                                         health_score = level2_stats['health_score'].get('score', 50)
-                                        health_color = level2_stats['health_score'].get('color', '#f39c12')
+                                        health_color = level2_stats['health_score'].get('color', RATING_COLORS['Fair'])
 
                                 hierarchy_data.append({
                                     'Level_0': level0_name,
@@ -1182,69 +1240,55 @@ with tab4:
                             'Health_Score': 'mean'
                         }).reset_index()
 
-                        viz_col1, viz_col2 = st.columns(2)
+                        st.markdown("#### 🔲 WBS Hierarchy")
+                        st.caption(
+                            "Size = activity count, colour = health score. "
+                            "Click a block to drill into it."
+                        )
 
-                        with viz_col1:
-                            st.markdown("#### 🔲 Treemap View")
-                            st.caption("Size = activity count, Color = health score")
-
-                            # Create treemap
-                            fig_treemap = px.treemap(
-                                df_agg,
-                                path=['Level_0', 'Level_1', 'Level_2'],
-                                values='Count',
-                                color='Health_Score',
-                                color_continuous_scale='RdYlGn',
-                                color_continuous_midpoint=50,
-                                range_color=[0, 100],
-                                title="WBS Hierarchy - Treemap",
-                                hover_data={'Health_Score': ':.1f', 'Count': True}
-                            )
-                            fig_treemap.update_layout(
-                                height=500,
-                                margin=dict(t=50, l=0, r=0, b=0)
-                            )
-                            fig_treemap.update_traces(
-                                textposition='middle center',
-                                textfont_size=11
-                            )
-                            st.plotly_chart(fig_treemap, use_container_width=True)
-
-                        with viz_col2:
-                            st.markdown("#### ☀️ Sunburst Chart")
-                            st.caption("Hierarchical view from project → phase → area")
-
-                            # Create sunburst
-                            fig_sunburst = px.sunburst(
-                                df_agg,
-                                path=['Level_0', 'Level_1', 'Level_2'],
-                                values='Count',
-                                color='Health_Score',
-                                color_continuous_scale='RdYlGn',
-                                color_continuous_midpoint=50,
-                                range_color=[0, 100],
-                                title="WBS Hierarchy - Sunburst",
-                                hover_data={'Health_Score': ':.1f', 'Count': True}
-                            )
-                            fig_sunburst.update_layout(
-                                height=500,
-                                margin=dict(t=50, l=0, r=0, b=0)
-                            )
-                            st.plotly_chart(fig_sunburst, use_container_width=True)
+                        # A sunburst of this same aggregate used to sit beside
+                        # the treemap; it plotted identical data, so the denser
+                        # of the two is kept and the duplicate removed.
+                        fig_treemap = px.treemap(
+                            df_agg,
+                            path=['Level_0', 'Level_1', 'Level_2'],
+                            values='Count',
+                            color='Health_Score',
+                            color_continuous_scale=CHART_SCALE_DIVERGING,
+                            color_continuous_midpoint=50,
+                            range_color=[0, 100],
+                            hover_data={'Health_Score': ':.1f', 'Count': True}
+                        )
+                        fig_treemap.update_traces(
+                            textposition='middle center',
+                            textfont_size=12
+                        )
+                        st.plotly_chart(
+                            apply_chart_theme(
+                                fig_treemap, height=520,
+                                margin=dict(t=16, l=0, r=0, b=0),
+                                coloraxis_colorbar=dict(title="Health"),
+                            ),
+                            use_container_width=True,
+                        )
 
                         # Legend for health scores
                         st.markdown("**Health Score Legend:**")
-                        legend_cols = st.columns(5)
-                        with legend_cols[0]:
-                            st.markdown("🟢 **Excellent** (80-100)")
-                        with legend_cols[1]:
-                            st.markdown("🟢 **Good** (65-79)")
-                        with legend_cols[2]:
-                            st.markdown("🟡 **Fair** (50-64)")
-                        with legend_cols[3]:
-                            st.markdown("🟠 **Poor** (35-49)")
-                        with legend_cols[4]:
-                            st.markdown("🔴 **Critical** (0-34)")
+                        legend_bands = [
+                            ("Excellent", "80-100"), ("Good", "65-79"),
+                            ("Fair", "50-64"), ("Poor", "35-49"),
+                            ("Critical", "0-34"),
+                        ]
+                        legend_cols = st.columns(len(legend_bands))
+                        for col, (band, band_range) in zip(legend_cols, legend_bands):
+                            with col:
+                                st.markdown(
+                                    f'<span class="status-badge" style="background-color:'
+                                    f'{RATING_COLORS[band]};">{band}</span> '
+                                    f'<span style="color:{COLORS["text_muted"]};">'
+                                    f'{band_range}</span>',
+                                    unsafe_allow_html=True,
+                                )
                     else:
                         st.info("Unable to build hierarchy visualization. Activities may not have complete WBS data.")
 
@@ -1279,59 +1323,61 @@ with tab4:
                     with health_cols[idx]:
                         score = phase_data['Health Score']
                         rating = phase_data['Rating']
-                        # Determine color based on score
-                        if score >= 80:
-                            color = "🟢"
-                        elif score >= 65:
-                            color = "🟢"
-                        elif score >= 50:
-                            color = "🟡"
-                        elif score >= 35:
-                            color = "🟠"
-                        else:
-                            color = "🔴"
-                        st.metric(
-                            phase_data['Phase'],
-                            f"{score:.0f}/100",
-                            delta=rating,
-                            delta_color="off"
+                        st.metric(phase_data['Phase'], fmt_score(score))
+                        st.markdown(
+                            status_badge(rating, _rating_variant(rating)),
+                            unsafe_allow_html=True,
                         )
-                        st.caption(f"{color} {rating}")
 
-                st.markdown("---")
+                section_divider()
 
                 # Bar chart - Activities by Phase
                 col1, col2 = st.columns(2)
 
                 with col1:
                     st.markdown("#### Activities by Phase")
+                    # More float is better, so the diverging scale runs
+                    # danger -> success.
                     fig = px.bar(
                         df_phases,
                         x='Phase',
                         y='Activities',
                         text='Activities',
                         color='Avg Float',
-                        color_continuous_scale='RdYlGn',
+                        color_continuous_scale=CHART_SCALE_DIVERGING,
                         title="Activity Distribution by WBS Phase"
                     )
                     fig.update_traces(textposition='outside')
-                    fig.update_layout(height=400)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(
+                        apply_chart_theme(
+                            fig, yaxis_title="Activities", yaxis_format="count",
+                            coloraxis_colorbar=dict(title="Avg float"),
+                        ),
+                        use_container_width=True,
+                    )
 
                 with col2:
                     st.markdown("#### Critical Activities by Phase")
+                    # More critical activities is worse, so this scale is the
+                    # criticality one: success -> danger.
                     fig = px.bar(
                         df_phases,
                         x='Phase',
                         y='Critical',
                         text='Critical',
                         color='Critical',
-                        color_continuous_scale='Reds',
+                        color_continuous_scale=CHART_SCALE_CRITICALITY,
                         title="Critical Activities by WBS Phase"
                     )
                     fig.update_traces(textposition='outside')
-                    fig.update_layout(height=400)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(
+                        apply_chart_theme(
+                            fig, yaxis_title="Critical activities",
+                            yaxis_format="count",
+                            coloraxis_colorbar=dict(title="Critical"),
+                        ),
+                        use_container_width=True,
+                    )
 
                 # Detailed table
                 st.markdown("#### Detailed Phase Statistics")
@@ -1340,12 +1386,12 @@ with tab4:
                     use_container_width=True,
                     column_config={
                         "Phase": st.column_config.TextColumn("Phase"),
-                        "Activities": st.column_config.NumberColumn("Activities", format="%d"),
-                        "Percentage": st.column_config.NumberColumn("% of Total", format="%.1f%%"),
-                        "Avg Float": st.column_config.NumberColumn("Avg Float (days)", format="%.1f"),
-                        "Critical": st.column_config.NumberColumn("Critical Count", format="%d"),
-                        "Negative Float": st.column_config.NumberColumn("Behind Schedule", format="%d"),
-                        "Health Score": st.column_config.NumberColumn("Health Score", format="%.0f"),
+                        "Activities": st.column_config.NumberColumn("Activities", format=COLUMN_FORMAT["count"]),
+                        "Percentage": st.column_config.NumberColumn("% of Total", format=COLUMN_FORMAT["pct"]),
+                        "Avg Float": st.column_config.NumberColumn("Avg Float (days)", format=COLUMN_FORMAT["days"]),
+                        "Critical": st.column_config.NumberColumn("Critical Count", format=COLUMN_FORMAT["count"]),
+                        "Negative Float": st.column_config.NumberColumn("Behind Schedule", format=COLUMN_FORMAT["count"]),
+                        "Health Score": st.column_config.NumberColumn("Health Score", format=COLUMN_FORMAT["score"]),
                         "Rating": st.column_config.TextColumn("Rating")
                     },
                     hide_index=True
@@ -1384,26 +1430,13 @@ with tab4:
                     with health_cols[idx]:
                         score = area_data['Health Score']
                         rating = area_data['Rating']
-                        # Determine color based on score
-                        if score >= 80:
-                            color = "🟢"
-                        elif score >= 65:
-                            color = "🟢"
-                        elif score >= 50:
-                            color = "🟡"
-                        elif score >= 35:
-                            color = "🟠"
-                        else:
-                            color = "🔴"
-                        st.metric(
-                            area_data['Area'],
-                            f"{score:.0f}/100",
-                            delta=rating,
-                            delta_color="off"
+                        st.metric(area_data['Area'], fmt_score(score))
+                        st.markdown(
+                            status_badge(rating, _rating_variant(rating)),
+                            unsafe_allow_html=True,
                         )
-                        st.caption(f"{color} {rating}")
 
-                st.markdown("---")
+                section_divider()
 
                 # Heatmap-style visualization
                 st.markdown("#### Area Health Overview")
@@ -1411,17 +1444,23 @@ with tab4:
                 # Sort by % Critical (descending) to show problem areas first
                 df_areas_sorted = df_areas.sort_values('% Critical', ascending=False)
 
+                # High % critical is bad, hence the criticality scale.
                 fig = px.bar(
                     df_areas_sorted,
                     x='Area',
                     y='Activities',
                     color='% Critical',
-                    color_continuous_scale='RdYlGn_r',  # Reverse: Red=high, Green=low
+                    color_continuous_scale=CHART_SCALE_CRITICALITY,
                     title="WBS Areas - Colored by % Critical Activities",
                     hover_data=['Avg Float', 'Critical', '% Critical']
                 )
-                fig.update_layout(height=400)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(
+                    apply_chart_theme(
+                        fig, yaxis_title="Activities", yaxis_format="count",
+                        coloraxis_colorbar=dict(title="% critical"),
+                    ),
+                    use_container_width=True,
+                )
 
                 # Detailed table
                 st.markdown("#### Detailed Area Statistics")
@@ -1430,12 +1469,12 @@ with tab4:
                     use_container_width=True,
                     column_config={
                         "Area": st.column_config.TextColumn("Area"),
-                        "Activities": st.column_config.NumberColumn("Activities", format="%d"),
-                        "Percentage": st.column_config.NumberColumn("% of Total", format="%.1f%%"),
-                        "Avg Float": st.column_config.NumberColumn("Avg Float (days)", format="%.1f"),
-                        "Critical": st.column_config.NumberColumn("Critical Count", format="%d"),
-                        "% Critical": st.column_config.NumberColumn("% Critical", format="%.1f%%"),
-                        "Health Score": st.column_config.NumberColumn("Health Score", format="%.0f"),
+                        "Activities": st.column_config.NumberColumn("Activities", format=COLUMN_FORMAT["count"]),
+                        "Percentage": st.column_config.NumberColumn("% of Total", format=COLUMN_FORMAT["pct"]),
+                        "Avg Float": st.column_config.NumberColumn("Avg Float (days)", format=COLUMN_FORMAT["days"]),
+                        "Critical": st.column_config.NumberColumn("Critical Count", format=COLUMN_FORMAT["count"]),
+                        "% Critical": st.column_config.NumberColumn("% Critical", format=COLUMN_FORMAT["pct"]),
+                        "Health Score": st.column_config.NumberColumn("Health Score", format=COLUMN_FORMAT["score"]),
                         "Rating": st.column_config.TextColumn("Rating")
                     },
                     hide_index=True
@@ -1447,7 +1486,11 @@ with tab4:
                     st.warning(f"⚠️ {len(problem_areas)} area(s) have >50% critical activities")
                     st.write("**High-Risk Areas:**")
                     for _, area in problem_areas.iterrows():
-                        st.write(f"- **{area['Area']}**: {area['% Critical']:.0f}% critical ({area['Critical']}/{area['Activities']} activities)")
+                        st.markdown(
+                            f"- **{area['Area']}**: {fmt_pct(area['% Critical'])} "
+                            f"critical ({fmt_count(area['Critical'])}/"
+                            f"{fmt_count(area['Activities'])} activities)"
+                        )
 
             # Guidance
             st.markdown("---")
@@ -1548,11 +1591,11 @@ with tab6:
 
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("High Priority", rec_summary['high'])
+            st.metric("High Priority", fmt_count(rec_summary['high']))
         with col2:
-            st.metric("Medium Priority", rec_summary['medium'])
+            st.metric("Medium Priority", fmt_count(rec_summary['medium']))
         with col3:
-            st.metric("Low Priority", rec_summary['low'])
+            st.metric("Low Priority", fmt_count(rec_summary['low']))
 
         st.markdown("---")
 

@@ -8,6 +8,8 @@ import numpy as np
 from typing import Dict, List, Tuple
 from datetime import datetime
 
+from src.ui.palette import RATING_COLORS
+
 
 class DCMAAnalyzer:
     """
@@ -1716,22 +1718,21 @@ class DCMAAnalyzer:
         # Calculate total score
         total_score = critical_score + float_score + negative_score + distribution_score
 
-        # Determine rating and color
+        # Determine rating. The colour is presentation only and comes from the
+        # shared palette in src/ui/theme.py so the dashboard, the charts and the
+        # exported reports all render a given rating identically.
         if total_score >= 80:
             rating = 'Excellent'
-            color = '#27ae60'  # Green
         elif total_score >= 65:
             rating = 'Good'
-            color = '#2ecc71'  # Light green
         elif total_score >= 50:
             rating = 'Fair'
-            color = '#f39c12'  # Orange
         elif total_score >= 35:
             rating = 'Poor'
-            color = '#e67e22'  # Dark orange
         else:
             rating = 'Critical'
-            color = '#e74c3c'  # Red
+
+        color = RATING_COLORS[rating]
 
         return {
             'score': round(total_score, 1),

@@ -19,3 +19,8 @@ plotly~=6.0
 
 # Report Generation
 python-docx~=1.2
+
+# Static chart export for the DOCX report (plotly fig -> PNG). Optional at
+# runtime: src/reports/docx_charts.py omits figures rather than failing if the
+# export backend is unavailable.
+kaleido~=0.2.1

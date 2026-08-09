@@ -6,10 +6,17 @@ Compare multiple schedule versions side-by-side
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from src.services import get_auth, get_database
+from src.services import get_auth, get_database, load_analysis, load_schedule
+from src.ui.diagnostics import timed
+from src.ui.theme import (
+    CHART_SEQUENCE, COLORS, app_header, apply_chart_theme, fmt_count,
+    fmt_delta_count, fmt_delta_index, fmt_delta_pct, fmt_delta_score, fmt_index,
+    fmt_pct, fmt_score, inject_css,
+)
 from src.utils.helpers import init_session_state, display_no_data_message
 
 st.set_page_config(page_title="Comparison", page_icon="📊", layout="wide")
+inject_css("Comparison")
 
 # Initialize
 init_session_state()
@@ -19,17 +26,19 @@ auth = get_auth(db)
 # Check authentication
 auth.require_auth()
 
-st.title("📊 Schedule Comparison")
-st.markdown("Compare multiple schedule versions to track improvements")
+app_header(
+    "📊 Schedule Comparison",
+    "Compare two schedule versions side-by-side to track improvements",
+)
 
 # User info in sidebar
 with st.sidebar:
-    st.markdown("---")
+    st.divider()
     user = auth.get_current_user()
     if user:
         st.markdown(f"**User:** {user['username']}")
         st.markdown(f"**Role:** {user['role'].capitalize()}")
-    st.markdown("---")
+    st.divider()
 
 # Get schedules
 schedules = db.get_all_schedules()
@@ -73,12 +82,17 @@ if schedule1_id == schedule2_id:
     st.warning("⚠️ Please select two different schedules to compare")
     st.stop()
 
-# Get schedule and analysis data
-schedule1 = db.get_schedule_by_id(schedule1_id)
-schedule2 = db.get_schedule_by_id(schedule2_id)
+# Get schedule and analysis data. Timed: this page loads two full schedules,
+# twice the largest read on any other page, and is the prime suspect if the
+# page appears to hang.
+with timed("Comparison: load schedule 1"):
+    schedule1 = load_schedule(schedule1_id)
+with timed("Comparison: load schedule 2"):
+    schedule2 = load_schedule(schedule2_id)
 
-analysis1 = db.get_analysis_by_schedule(schedule1_id)
-analysis2 = db.get_analysis_by_schedule(schedule2_id)
+with timed("Comparison: load analyses"):
+    analysis1 = load_analysis(schedule1_id)
+    analysis2 = load_analysis(schedule2_id)
 
 if not analysis1 or not analysis2:
     display_no_data_message("Analysis results not available for one or both schedules")
@@ -94,8 +108,8 @@ col1, col2, col3 = st.columns([1, 1, 1])
 with col1:
     score1 = analysis1['health_score']
     st.metric(
-        "Schedule 1",
-        f"{score1:.1f}/100",
+        "Schedule 1 (Baseline)",
+        fmt_score(score1),
         help=schedule1_label
     )
 
@@ -103,19 +117,24 @@ with col2:
     score2 = analysis2['health_score']
     delta = score2 - score1
     st.metric(
-        "Schedule 2",
-        f"{score2:.1f}/100",
-        delta=f"{delta:+.1f}",
+        "Schedule 2 (Current)",
+        fmt_score(score2),
+        delta=fmt_delta_score(delta),
         delta_color="normal",
         help=schedule2_label
     )
 
 with col3:
     improvement_pct = ((score2 - score1) / score1 * 100) if score1 > 0 else 0
+    # "Better"/"Worse" as a delta would colour by its own sign; the change is
+    # already carried by the value, so it goes in the caption instead.
     st.metric(
-        "Improvement",
-        f"{improvement_pct:+.1f}%",
-        delta="Better" if improvement_pct > 0 else "Worse" if improvement_pct < 0 else "Same"
+        "Change vs Baseline",
+        fmt_delta_pct(improvement_pct),
+    )
+    st.caption(
+        "Better" if improvement_pct > 0
+        else "Worse" if improvement_pct < 0 else "Unchanged"
     )
 
 # Visual comparison
@@ -124,25 +143,26 @@ fig = go.Figure(data=[
         name='Schedule 1',
         x=['Health Score'],
         y=[score1],
-        marker_color='lightblue'
+        marker_color=CHART_SEQUENCE[0]
     ),
     go.Bar(
         name='Schedule 2',
         x=['Health Score'],
         y=[score2],
-        marker_color='darkblue'
+        marker_color=CHART_SEQUENCE[1]
     )
 ])
 
-fig.update_layout(
-    title="Health Score Comparison",
-    yaxis_title="Score (0-100)",
-    barmode='group'
+st.plotly_chart(
+    apply_chart_theme(
+        fig, title="Health Score Comparison",
+        yaxis_title="Score (0-100)", yaxis_format="score",
+        barmode='group', yaxis_range=[0, 100],
+    ),
+    use_container_width=True,
 )
 
-st.plotly_chart(fig, use_container_width=True)
-
-st.markdown("---")
+st.divider()
 
 # Key Metrics Comparison
 st.markdown("## Key Metrics Comparison")
@@ -219,10 +239,12 @@ def highlight_change(val):
         # Non-numeric cells (e.g. 'N/A') are simply left unstyled.
         return ''
 
+    # Every metric in this table is one where lower is better, so a negative
+    # change is an improvement.
     if numeric < 0:
-        return 'background-color: lightgreen'
+        return f'background-color: {COLORS["success"]}; color: {COLORS["white"]}'
     if numeric > 0:
-        return 'background-color: lightcoral'
+        return f'background-color: {COLORS["danger"]}; color: {COLORS["white"]}'
     return ''
 
 styled_df = df_comparison.style.map(
@@ -246,18 +268,22 @@ col1, col2, col3 = st.columns(3)
 issues1 = analysis1['issues']
 issues2 = analysis2['issues']
 
+# delta_color="inverse": more issues is worse, so a positive delta must read
+# red. The Streamlit default would colour any increase green.
 with col1:
-    st.metric("Schedule 1 Issues", len(issues1))
+    st.metric("Schedule 1 Issues", fmt_count(len(issues1)))
 
 with col2:
     issues_delta = len(issues2) - len(issues1)
-    st.metric("Schedule 2 Issues", len(issues2), delta=f"{issues_delta:+d}")
+    st.metric("Schedule 2 Issues", fmt_count(len(issues2)),
+              delta=fmt_delta_count(issues_delta), delta_color="inverse")
 
 with col3:
     high1 = len([i for i in issues1 if i['severity'] == 'high'])
     high2 = len([i for i in issues2 if i['severity'] == 'high'])
     high_delta = high2 - high1
-    st.metric("High Priority Issues", high2, delta=f"{high_delta:+d}")
+    st.metric("High Priority Issues", fmt_count(high2),
+              delta=fmt_delta_count(high_delta), delta_color="inverse")
 
 # Issues by severity chart
 severity_data = {
@@ -280,7 +306,7 @@ fig = go.Figure(data=[
         y=[severity_data['Schedule 1']['High'],
            severity_data['Schedule 1']['Medium'],
            severity_data['Schedule 1']['Low']],
-        marker_color='lightblue'
+        marker_color=CHART_SEQUENCE[0]
     ),
     go.Bar(
         name='Schedule 2',
@@ -288,19 +314,20 @@ fig = go.Figure(data=[
         y=[severity_data['Schedule 2']['High'],
            severity_data['Schedule 2']['Medium'],
            severity_data['Schedule 2']['Low']],
-        marker_color='darkblue'
+        marker_color=CHART_SEQUENCE[1]
     )
 ])
 
-fig.update_layout(
-    title="Issues by Severity",
-    yaxis_title="Count",
-    barmode='group'
+st.plotly_chart(
+    apply_chart_theme(
+        fig, title="Issues by Severity",
+        xaxis_title="Severity", yaxis_title="Issues",
+        yaxis_format="count", barmode='group',
+    ),
+    use_container_width=True,
 )
 
-st.plotly_chart(fig, use_container_width=True)
-
-st.markdown("---")
+st.divider()
 
 # Performance Metrics Comparison (if available)
 if 'performance_metrics' in analysis1 and 'performance_metrics' in analysis2:
@@ -315,11 +342,12 @@ if 'performance_metrics' in analysis1 and 'performance_metrics' in analysis2:
         cpli1 = perf1.get('cpli', {}).get('value', 0)
         cpli2 = perf2.get('cpli', {}).get('value', 0)
         cpli_delta = cpli2 - cpli1
+        # CPLI/BEI: higher is better, so the default delta colouring is right.
         st.metric(
             "CPLI (Schedule 2)",
-            f"{cpli2:.3f}",
-            delta=f"{cpli_delta:+.3f}",
-            help="Critical Path Length Index"
+            fmt_index(cpli2),
+            delta=fmt_delta_index(cpli_delta),
+            help="Critical Path Length Index. Target: ≥ 0.95"
         )
 
     with col2:
@@ -328,19 +356,21 @@ if 'performance_metrics' in analysis1 and 'performance_metrics' in analysis2:
         bei_delta = bei2 - bei1
         st.metric(
             "BEI (Schedule 2)",
-            f"{bei2:.3f}",
-            delta=f"{bei_delta:+.3f}",
-            help="Baseline Execution Index"
+            fmt_index(bei2),
+            delta=fmt_delta_index(bei_delta),
+            help="Baseline Execution Index. Target: ≥ 0.95"
         )
 
     with col3:
         recs1 = len(analysis1.get('recommendations', []))
         recs2 = len(analysis2.get('recommendations', []))
         recs_delta = recs2 - recs1
+        # More outstanding recommendations is worse.
         st.metric(
             "Recommendations",
-            recs2,
-            delta=f"{recs_delta:+d}"
+            fmt_count(recs2),
+            delta=fmt_delta_count(recs_delta),
+            delta_color="inverse"
         )
 
     with col4:
@@ -362,9 +392,9 @@ if improvement_pct > 0:
     st.success(f"""
     🎉 **Schedule 2 shows improvement over Schedule 1!**
 
-    - Health Score improved by {improvement_pct:.1f}%
-    - Issues changed from {len(issues1)} to {len(issues2)} ({issues_delta:+d})
-    - High priority issues changed from {high1} to {high2} ({high_delta:+d})
+    - Health Score improved by {fmt_pct(improvement_pct)}
+    - Issues changed from {len(issues1)} to {len(issues2)} ({fmt_delta_count(issues_delta)})
+    - High priority issues changed from {high1} to {high2} ({fmt_delta_count(high_delta)})
 
     Continue monitoring these metrics and addressing remaining issues.
     """)
@@ -372,7 +402,7 @@ elif improvement_pct < 0:
     st.warning(f"""
     ⚠️ **Schedule 2 shows regression from Schedule 1**
 
-    - Health Score decreased by {abs(improvement_pct):.1f}%
+    - Health Score decreased by {fmt_pct(abs(improvement_pct))}
     - Review the Analysis Dashboard to identify new issues
     - Focus on high-priority recommendations
 
