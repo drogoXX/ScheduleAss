@@ -10,6 +10,7 @@ from src.analysis.dcma_analyzer import DCMAAnalyzer
 from src.analysis.metrics_calculator import MetricsCalculator
 from src.analysis.recommendations import RecommendationsEngine
 from src.config import settings
+from src.core.ingest.formats import SourceFormat, describe_format, detect_format
 from src.logging_config import get_logger
 from src.ui.theme import app_header, fmt_count, fmt_score, inject_css
 from src.utils.helpers import (
@@ -107,9 +108,10 @@ st.markdown("---")
 st.subheader("2. Upload Schedule File")
 
 uploaded_file = st.file_uploader(
-    "Choose a P6 CSV file",
+    "Choose a schedule CSV file",
     type=['csv'],
-    help="Upload a Primavera P6 schedule export in CSV format"
+    help="Upload a Primavera P6 or Microsoft Project schedule export in CSV format. "
+         "The format is detected automatically from the file's columns."
 )
 
 if uploaded_file is not None:
@@ -124,6 +126,24 @@ if uploaded_file is not None:
             f"✅ File uploaded: {uploaded_file.name} "
             f"({uploaded_file.size / 1024:.1f} KB)"
         )
+
+        # Tell the user which tool we think produced the file, before they commit
+        # to a run - a misdetected format is much cheaper to catch here.
+        detected = detect_format(uploaded_file.getvalue(), uploaded_file.name)
+        if detected is SourceFormat.UNKNOWN:
+            display_warning_message(
+                "Could not recognise this as a P6 or Microsoft Project export. "
+                "Analysis will be attempted as P6 and may fail. Check that the export "
+                "includes the activity, date, float and relationship columns."
+            )
+        else:
+            st.info(f"Detected format: **{describe_format(detected)}**")
+            if detected is SourceFormat.MSPROJECT_CSV:
+                st.caption(
+                    "Microsoft Project exports carry no activity status or resource data, "
+                    "so some DCMA checks cannot be assessed. Summary (rollup) rows are "
+                    "identified and excluded from the assessment."
+                )
 
         # Preview file
         with st.expander("📄 Preview File (first 10 rows)"):

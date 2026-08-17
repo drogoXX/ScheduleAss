@@ -1,6 +1,9 @@
 """
-Schedule Parser for P6 CSV exports
-Parses and validates Primavera P6 schedule data
+Schedule Parser for P6 and Microsoft Project CSV exports
+
+Dispatches on the detected source format: P6 exports run the cleaning and
+relationship-parsing pipeline below, while Microsoft Project exports are
+translated to the same canonical frame by src.core.ingest.msproject.
 """
 
 import csv
@@ -12,6 +15,7 @@ from typing import Dict, List, Tuple, Optional
 from datetime import datetime
 import io
 from src.config import settings
+from src.core.ingest import MSProjectCsvReader, SourceFormat, detect_format
 from src.logging_config import get_logger
 from src.parsers.wbs_parser import WBSParser
 
@@ -66,32 +70,47 @@ class ScheduleParser:
         self.warnings = []
 
         try:
-            df = self._read_csv(file_content)
+            source_format = detect_format(file_content, file_name)
 
-            if df is None:
-                return {
-                    'success': False,
-                    'errors': self.errors,
-                    'warnings': self.warnings,
-                }
+            if source_format is SourceFormat.MSPROJECT_CSV:
+                # The MS Project reader emits a canonical frame with relationships
+                # and dates already parsed, so the P6 cleaning path is skipped -
+                # _clean_data() stringifies object columns and would destroy the
+                # predecessor_list / successor_list structures.
+                df = self._read_msproject(file_content)
+                if df is None:
+                    return {
+                        'success': False,
+                        'errors': self.errors,
+                        'warnings': self.warnings,
+                    }
+            else:
+                df = self._read_csv(file_content)
 
-            # Validate columns
-            validation_result = self._validate_columns(df)
-            if not validation_result['valid']:
-                return {
-                    'success': False,
-                    'errors': validation_result['errors'],
-                    'warnings': validation_result['warnings']
-                }
+                if df is None:
+                    return {
+                        'success': False,
+                        'errors': self.errors,
+                        'warnings': self.warnings,
+                    }
 
-            # Clean and standardize data
-            df = self._clean_data(df)
+                # Validate columns
+                validation_result = self._validate_columns(df)
+                if not validation_result['valid']:
+                    return {
+                        'success': False,
+                        'errors': validation_result['errors'],
+                        'warnings': validation_result['warnings']
+                    }
 
-            # Parse relationships
-            df = self._parse_relationships(df)
+                # Clean and standardize data
+                df = self._clean_data(df)
 
-            # Parse dates
-            df = self._parse_dates(df)
+                # Parse relationships
+                df = self._parse_relationships(df)
+
+                # Parse dates
+                df = self._parse_dates(df)
 
             # Calculate derived fields
             df = self._calculate_derived_fields(df)
@@ -103,6 +122,7 @@ class ScheduleParser:
             schedule_data = {
                 'success': True,
                 'file_name': file_name,
+                'source_format': source_format.value,
                 'upload_date': datetime.now().isoformat(),
                 'total_activities': len(df),
                 'activities': df.to_dict('records'),
@@ -119,6 +139,29 @@ class ScheduleParser:
                 'errors': [f"Failed to parse CSV file: {str(e)}"],
                 'warnings': self.warnings
             }
+
+    def _read_msproject(self, file_content: bytes) -> Optional[pd.DataFrame]:
+        """Read a Microsoft Project CSV export into the canonical frame.
+
+        Returns None and populates self.errors if the export cannot be translated.
+        """
+        translation = MSProjectCsvReader().read(file_content)
+
+        for warning in translation.warnings:
+            if warning not in self.warnings:
+                self.warnings.append(warning)
+
+        if not translation.ok:
+            self.errors.extend(translation.errors)
+            return None
+
+        logger.info(
+            "MS Project export translated: %d activities, %d summary rows, "
+            "%d truncated cells, %d edges recovered by inversion",
+            len(translation.frame), translation.summary_task_count,
+            translation.truncated_cells, translation.recovered_edges,
+        )
+        return translation.frame
 
     # Encodings tried in order. P6 on Windows commonly exports cp1252, and
     # Excel round-trips often add a UTF-8 BOM.

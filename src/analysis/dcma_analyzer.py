@@ -24,11 +24,35 @@ class DCMAAnalyzer:
             schedule_data: Parsed schedule data from ScheduleParser
         """
         self.schedule_data = schedule_data
-        self.df = pd.DataFrame(schedule_data['activities'])
+        self.full_df = pd.DataFrame(schedule_data['activities'])
         self.metrics = {}
         self.issues = []
         self.warnings = []
         self._records_cache = None
+
+        # Summary (rollup) rows are excluded from every DCMA check.
+        #
+        # Microsoft Project interleaves WBS rollup rows with real activities, where
+        # P6 keeps the WBS as separate structure. A rollup has no logic of its own
+        # and its dates, duration and float are derived from its children, so
+        # including it corrupts both the numerator and the denominator. In the
+        # reference VRATO export, 107 of 764 rows are rollups and they account for
+        # 107 of 198 apparent "missing logic" activities - 54% of the finding would
+        # be an artefact of the export format rather than a defect in the schedule.
+        self.summary_task_count = 0
+        if 'is_summary_task' in self.full_df.columns:
+            is_summary = self.full_df['is_summary_task'].fillna(False).astype(bool)
+            self.summary_task_count = int(is_summary.sum())
+            self.df = self.full_df[~is_summary].reset_index(drop=True)
+        else:
+            self.df = self.full_df
+
+        if self.summary_task_count:
+            self.warnings.append(
+                f"Excluded {self.summary_task_count} summary (rollup) row(s) from the DCMA "
+                f"assessment; {len(self.df)} activities assessed. Rollups have no logic of "
+                "their own and their dates are derived from child tasks."
+            )
 
     def _rows(self):
         """
@@ -119,9 +143,19 @@ class DCMAAnalyzer:
         # WBS Analysis (if WBS data available)
         self._analyze_wbs_structure()
 
+        # Declare what was actually assessed. Every percentage below is a fraction
+        # of this population, and the report must be able to state it.
+        self.metrics['assessment_scope'] = {
+            'rows_in_export': int(len(self.full_df)),
+            'summary_rows_excluded': self.summary_task_count,
+            'activities_assessed': int(len(self.df)),
+            'source_format': self.schedule_data.get('source_format', 'p6_csv'),
+        }
+
         return {
             'metrics': self.metrics,
-            'issues': self.issues
+            'issues': self.issues,
+            'warnings': self.warnings,
         }
 
     def _analyze_negative_lags(self):
