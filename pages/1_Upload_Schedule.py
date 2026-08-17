@@ -53,11 +53,23 @@ with col1:
     projects = db.get_all_projects()
     project_options = {f"{p['project_name']} ({p['project_code']})": p['id'] for p in projects}
 
+    # A project created below sets these before rerunning, so the new project is
+    # selected on the next run. Without this the radio keeps its previous value
+    # ("Create new project") across the rerun, the "Use existing project" branch
+    # never executes, selected_project_id stays None, and the analyse button is
+    # left permanently disabled with the project the user just created sitting
+    # unselected. Widget state is keyed so it can be steered from session_state.
+    just_created = st.session_state.pop("newly_created_project", None)
+    if just_created and just_created in project_options:
+        st.session_state["project_mode"] = "Use existing project"
+        st.session_state["project_choice"] = just_created
+
     if project_options:
         use_existing = st.radio(
             "Choose an option:",
             ["Use existing project", "Create new project"],
-            horizontal=True
+            horizontal=True,
+            key="project_mode",
         )
     else:
         use_existing = "Create new project"
@@ -68,7 +80,8 @@ with col1:
     if use_existing == "Use existing project" and project_options:
         selected_project = st.selectbox(
             "Select Project",
-            options=list(project_options.keys())
+            options=list(project_options.keys()),
+            key="project_choice",
         )
         selected_project_id = project_options[selected_project]
     else:
@@ -96,7 +109,12 @@ with col1:
                         # create cannot slip past a pre-check.
                         display_error_message(str(exc))
                     else:
-                        selected_project_id = new_project['id']
+                        # Hand the new project to the next run, which selects it.
+                        # Assigning selected_project_id here would be pointless -
+                        # st.rerun() discards this run's local state immediately.
+                        st.session_state["newly_created_project"] = (
+                            f"{new_project['project_name']} ({new_project['project_code']})"
+                        )
                         display_success_message(f"Project '{project_name}' created successfully!")
                         st.rerun()
                 else:
@@ -170,14 +188,26 @@ st.markdown("---")
 # Analyze button
 st.subheader("3. Upload and Analyze")
 
+# Say what is missing. A disabled button with no explanation reads as a broken
+# app: the user cannot tell whether they missed a step or the upload failed.
+blockers = []
+if selected_project_id is None:
+    blockers.append("select or create a project in step 1")
+if uploaded_file is None:
+    blockers.append("choose a schedule file in step 2")
+
+if blockers:
+    st.info(f"To run the analysis, {' and '.join(blockers)}.")
+
 col1, col2, col3 = st.columns([1, 1, 1])
 
 with col2:
     analyze_button = st.button(
         "🚀 Upload and Analyze",
         use_container_width=True,
-        disabled=(uploaded_file is None or selected_project_id is None),
-        type="primary"
+        disabled=bool(blockers),
+        type="primary",
+        help=None if not blockers else f"Still needed: {'; '.join(blockers)}.",
     )
 
 if analyze_button:
