@@ -410,8 +410,11 @@ class ScheduleParser:
             if warning not in self.warnings:
                 self.warnings.append(warning)
 
-        # Build WBS hierarchy for later use
-        self.wbs_parser.build_wbs_hierarchy(df)
+        # NOTE: build_wbs_hierarchy() is deliberately NOT called here. It only sets
+        # wbs_parser.wbs_hierarchy, which nothing reads, and this ScheduleParser is
+        # discarded once parse_csv() returns - so the result was unreachable. The call
+        # cost ~0.36s per upload on a 6,300-activity schedule (it scans via iterrows).
+        # Call it explicitly from the caller if the hierarchy is ever actually needed.
 
         return df
 

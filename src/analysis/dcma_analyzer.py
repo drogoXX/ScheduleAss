@@ -27,6 +27,22 @@ class DCMAAnalyzer:
         self.metrics = {}
         self.issues = []
         self.warnings = []
+        self._records_cache = None
+
+    def _rows(self):
+        """
+        Cached list-of-dicts view of self.df, used instead of repeated .iterrows().
+
+        The analysis methods below scan the full activity table ~18 times. Each
+        .iterrows() pass builds one pd.Series per row (36 columns), which dominated
+        the runtime. Row dicts support the same row['X'] / row.get('X', default)
+        access, so loop bodies are unchanged.
+
+        Invalidate by setting self._records_cache = None after mutating self.df.
+        """
+        if self._records_cache is None:
+            self._records_cache = self.df.to_dict('records')
+        return self._records_cache
 
     def analyze(self) -> Dict:
         """
@@ -89,7 +105,7 @@ class DCMAAnalyzer:
         """Analyze negative lags (leads)"""
         negative_lags = []
 
-        for idx, row in self.df.iterrows():
+        for row in self._rows():
             predecessors = row.get('predecessor_list', [])
             for pred in predecessors:
                 if pred.get('lag', 0) < 0:
@@ -124,7 +140,7 @@ class DCMAAnalyzer:
         positive_lags = []
         total_relationships = 0
 
-        for idx, row in self.df.iterrows():
+        for row in self._rows():
             predecessors = row.get('predecessor_list', [])
             total_relationships += len(predecessors)
 
@@ -177,7 +193,7 @@ class DCMAAnalyzer:
             # Get all activities with ANY constraint (not 'None')
             constrained = self.df[self.df['has_any_constraint'] == True]
 
-            for idx, row in constrained.iterrows():
+            for row in constrained.to_dict('records'):
                 constraint_info = {
                     'activity_id': row['Activity ID'],
                     'activity_name': row['Activity Name'],
@@ -294,7 +310,7 @@ class DCMAAnalyzer:
         if 'missing_logic' in self.df.columns:
             missing = self.df[self.df['missing_logic'] == True]
 
-            for idx, row in missing.iterrows():
+            for row in missing.to_dict('records'):
                 has_missing_pred = row.get('missing_predecessor', False)
                 has_missing_succ = row.get('missing_successor', False)
 
@@ -345,7 +361,7 @@ class DCMAAnalyzer:
         open_starts = []
         open_finishes = []
 
-        for idx, row in self.df.iterrows():
+        for row in self._rows():
             if row.get('missing_predecessor', False):
                 open_starts.append(row['Activity ID'])
             if row.get('missing_successor', False):
@@ -377,7 +393,7 @@ class DCMAAnalyzer:
                 # Exclude activities where Activity Type contains "Milestone" (case insensitive)
                 non_milestone_df = self.df[~self.df['Activity Type'].str.contains('Milestone', case=False, na=False)]
 
-            for idx, row in non_milestone_df.iterrows():
+            for row in non_milestone_df.to_dict('records'):
                 duration = row.get(duration_col, 0)
                 if pd.notna(duration) and duration > 0:  # Exclude zero-duration activities
                     if duration > 150:  # ~5 months
@@ -478,7 +494,7 @@ class DCMAAnalyzer:
             else:
                 float_threshold = 100  # Default threshold
 
-            for idx, row in self.df.iterrows():
+            for row in self._rows():
                 total_float = row.get('Total Float', 0)
                 if pd.notna(total_float) and total_float > float_threshold:
                     high_float_activities.append({
@@ -790,6 +806,7 @@ class DCMAAnalyzer:
         if 'Start' in self.df.columns and 'Finish' in self.df.columns:
             # Group by month
             self.df['start_month'] = pd.to_datetime(self.df['Start']).dt.to_period('M')
+            self._records_cache = None  # self.df changed; drop the cached row view
             distribution = self.df.groupby('start_month').size().to_dict()
 
             # Convert Period to string for JSON serialization
@@ -807,7 +824,7 @@ class DCMAAnalyzer:
         unassigned = []
 
         if 'Resource Names' in self.df.columns:
-            for idx, row in self.df.iterrows():
+            for row in self._rows():
                 resources = row.get('Resource Names', '')
                 if pd.isna(resources) or str(resources).strip() == '' or str(resources).lower() == 'nan':
                     unassigned.append(row['Activity ID'])
@@ -825,7 +842,7 @@ class DCMAAnalyzer:
         duration_col = 'At Completion Duration' if 'At Completion Duration' in self.df.columns else 'calculated_duration'
 
         if duration_col in self.df.columns:
-            for idx, row in self.df.iterrows():
+            for row in self._rows():
                 duration = row.get(duration_col, 1)
                 if duration == 0 or pd.isna(duration):
                     milestones.append({
@@ -855,7 +872,7 @@ class DCMAAnalyzer:
         relationship_types = {'FS': 0, 'SS': 0, 'FF': 0, 'SF': 0}
         total_relationships = 0
 
-        for idx, row in self.df.iterrows():
+        for row in self._rows():
             predecessors = row.get('predecessor_list', [])
             for pred in predecessors:
                 rel_type = pred.get('type', 'FS')
@@ -918,7 +935,7 @@ class DCMAAnalyzer:
         negative_float_activities = []
         float_series = self.df['Total Float'].dropna()
 
-        for idx, row in self.df.iterrows():
+        for row in self._rows():
             total_float = row.get('Total Float')
             if pd.notna(total_float) and total_float < 0:
                 negative_float_activities.append({
@@ -950,7 +967,7 @@ class DCMAAnalyzer:
         """
         missing_pred_activities = []
 
-        for idx, row in self.df.iterrows():
+        for row in self._rows():
             if row.get('missing_predecessor', False):
                 missing_pred_activities.append({
                     'activity_id': row['Activity ID'],
@@ -976,7 +993,7 @@ class DCMAAnalyzer:
         """
         missing_succ_activities = []
 
-        for idx, row in self.df.iterrows():
+        for row in self._rows():
             if row.get('missing_successor', False):
                 missing_succ_activities.append({
                     'activity_id': row['Activity ID'],
@@ -1028,7 +1045,7 @@ class DCMAAnalyzer:
 
         total_analyzed = len(incomplete_df)
 
-        for idx, row in incomplete_df.iterrows():
+        for row in incomplete_df.to_dict('records'):
             duration = row.get(duration_col, 0)
             if pd.notna(duration) and duration > 44:
                 long_activities.append({
@@ -1086,7 +1103,7 @@ class DCMAAnalyzer:
         # 5 years from data date
         five_years_future = pd.Timestamp(data_date) + pd.DateOffset(years=5)
 
-        for idx, row in self.df.iterrows():
+        for row in self._rows():
             start_date = row.get('Start')
             finish_date = row.get('Finish')
             status = row.get('Activity Status', '')
@@ -1164,7 +1181,7 @@ class DCMAAnalyzer:
 
         high_float_activities = []
 
-        for idx, row in incomplete_df.iterrows():
+        for row in incomplete_df.to_dict('records'):
             total_float = row.get('Total Float')
             if pd.notna(total_float) and total_float > 44:
                 high_float_activities.append({
@@ -1224,7 +1241,7 @@ class DCMAAnalyzer:
         total_incomplete = len(incomplete_df)
         unassigned_activities = []
 
-        for idx, row in incomplete_df.iterrows():
+        for row in incomplete_df.to_dict('records'):
             resources = row.get('Resource Names', '')
             if pd.isna(resources) or str(resources).strip() == '' or str(resources).lower() == 'nan':
                 unassigned_activities.append({
@@ -1264,7 +1281,7 @@ class DCMAAnalyzer:
         ss_ff_relationships = []
         total_relationships = 0
 
-        for idx, row in self.df.iterrows():
+        for row in self._rows():
             predecessors = row.get('predecessor_list', [])
             for pred in predecessors:
                 total_relationships += 1

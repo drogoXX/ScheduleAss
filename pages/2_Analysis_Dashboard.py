@@ -5,6 +5,7 @@ Displays comprehensive schedule quality analysis
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from src.database.db_manager import DatabaseManager
@@ -67,6 +68,14 @@ if not analysis:
 # Store in session state
 st.session_state.current_schedule = schedule
 st.session_state.current_analysis = analysis
+
+# Build the activity DataFrame ONCE per script run and share it across all tabs.
+# st.tabs() renders every tab body on every rerun, so the previous code rebuilt this
+# same frame at 8 separate call sites (~28ms each on a 6,300-activity schedule).
+# A plain local is enough here - all tabs execute within this one script run, so no
+# caching (and none of st.cache_data's copy-on-return semantics) is involved.
+activities = schedule['schedule_data'].get('activities', [])
+activities_df = pd.DataFrame(activities) if activities else pd.DataFrame()
 
 st.markdown("---")
 
@@ -316,9 +325,8 @@ with tab2:
 
     with col2:
         # Duration distribution (if data available)
-        activities = schedule['schedule_data'].get('activities', [])
         if activities:
-            df = pd.DataFrame(activities)
+            df = activities_df
             if 'At Completion Duration' in df.columns:
                 durations = df['At Completion Duration'].dropna()
                 fig = px.histogram(
@@ -513,13 +521,16 @@ with tab2:
 # HELPER FUNCTIONS FOR FLOAT ANALYSIS - Calculate chart data on-demand
 # ============================================================================
 
-def calculate_float_distribution(activities):
-    """Calculate float distribution for histogram and donut chart"""
+def calculate_float_distribution(df):
+    """Calculate float distribution for histogram and donut chart
+
+    Takes the prebuilt activity DataFrame (see activities_df above) rather than the
+    raw activities list, so the frame is not reconstructed on every rerun.
+    """
     try:
-        if not activities:
+        if df is None or df.empty:
             return {}
 
-        df = pd.DataFrame(activities)
         if 'Total Float' not in df.columns:
             return {}
 
@@ -541,13 +552,14 @@ def calculate_float_distribution(activities):
         # Return empty dict on any error to prevent tab crash
         return {}
 
-def calculate_float_by_wbs(activities):
-    """Calculate float by WBS code for box plot"""
-    try:
-        if not activities:
-            return {}
+def calculate_float_by_wbs(df):
+    """Calculate float by WBS code for box plot
 
-        df = pd.DataFrame(activities)
+    Takes the prebuilt activity DataFrame (see activities_df above).
+    """
+    try:
+        if df is None or df.empty:
+            return {}
 
         # Check if required columns exist
         if 'Total Float' not in df.columns:
@@ -587,13 +599,15 @@ def calculate_float_by_wbs(activities):
         # Return empty dict on any error to prevent tab crash
         return {}
 
-def get_negative_float_activities(activities):
-    """Get list of activities with negative float (sorted by most negative)"""
+def get_negative_float_activities(df):
+    """Get list of activities with negative float (sorted by most negative)
+
+    Takes the prebuilt activity DataFrame (see activities_df above).
+    """
     try:
-        if not activities:
+        if df is None or df.empty:
             return []
 
-        df = pd.DataFrame(activities)
         if 'Total Float' not in df.columns:
             return []
 
@@ -637,8 +651,7 @@ with tab3:
 
         float_data = metrics.get('comprehensive_float', {})
 
-        # Calculate chart data on-demand from activities (not stored in metrics)
-        activities = schedule['schedule_data'].get('activities', [])
+        # `activities` / `activities_df` are built once near the top of this page.
 
         # Validate activities data
         if not activities or not isinstance(activities, list):
@@ -648,19 +661,19 @@ with tab3:
 
         # Safely calculate chart data with error handling
         try:
-            distribution = calculate_float_distribution(activities)
+            distribution = calculate_float_distribution(activities_df)
         except Exception as e:
             st.error(f"Error calculating float distribution: {str(e)}")
             distribution = {}
 
         try:
-            float_by_wbs = calculate_float_by_wbs(activities)
+            float_by_wbs = calculate_float_by_wbs(activities_df)
         except Exception as e:
             st.error(f"Error calculating float by WBS: {str(e)}")
             float_by_wbs = {}
 
         try:
-            negative_activities = get_negative_float_activities(activities)
+            negative_activities = get_negative_float_activities(activities_df)
         except Exception as e:
             st.error(f"Error getting negative float activities: {str(e)}")
             negative_activities = []
@@ -926,13 +939,13 @@ with tab3:
                     else:
                         # No traces were added - show debug info
                         st.info("⚠️ WBS codes found but no valid float data to display")
-                        test_df = pd.DataFrame(activities)
+                        test_df = activities_df
                         st.write(f"Debug: Found {len(float_by_wbs)} WBS codes, but all have empty float value lists")
                         both_valid = test_df.dropna(subset=['WBS Code', 'Total Float'])
                         st.write(f"Activities with both WBS Code and Total Float: {len(both_valid)}")
                 else:
                     # Debug information - why no data?
-                    test_df = pd.DataFrame(activities)
+                    test_df = activities_df
                     if 'WBS Code' not in test_df.columns:
                         st.warning("⚠️ WBS Code column not found in schedule data")
                         st.info("Your P6 export may not include the WBS Code column. This is optional but recommended for detailed analysis.")
@@ -1091,19 +1104,30 @@ with tab4:
                 # Build hierarchical dataframe
                 hierarchy_data = []
 
-                # Get activities for building full hierarchy
-                activities = schedule['schedule_data'].get('activities', [])
                 if activities:
-                    df_activities = pd.DataFrame(activities)
+                    df_activities = activities_df
 
                     # Check if we have WBS level columns
                     if 'wbs_level_0' in df_activities.columns and 'wbs_level_1' in df_activities.columns:
-                        # Build hierarchy from activities
-                        for _, row in df_activities.iterrows():
-                            if pd.notna(row.get('wbs_level_0')):
-                                level0_name = str(row['wbs_level_0'])
-                                level1_name = str(row.get('wbs_level_1', '')) if pd.notna(row.get('wbs_level_1')) else None
-                                level2_name = str(row.get('wbs_level_2', '')) if pd.notna(row.get('wbs_level_2')) else None
+                        # Build hierarchy from activities.
+                        # Iterate over plain column arrays rather than .iterrows(): this runs
+                        # on every rerun (st.tabs renders all tab bodies), and building one
+                        # Series per row cost ~183ms on a 6,300-activity schedule.
+                        def _col(name, default=''):
+                            if name in df_activities.columns:
+                                return df_activities[name].to_numpy()
+                            return np.full(len(df_activities), default, dtype=object)
+
+                        _l0 = _col('wbs_level_0')
+                        _l1 = _col('wbs_level_1')
+                        _l2 = _col('wbs_level_2')
+                        _ids = _col('Activity ID')
+
+                        for l0_val, l1_val, l2_val, act_id in zip(_l0, _l1, _l2, _ids):
+                            if pd.notna(l0_val):
+                                level0_name = str(l0_val)
+                                level1_name = str(l1_val) if pd.notna(l1_val) else None
+                                level2_name = str(l2_val) if pd.notna(l2_val) else None
 
                                 # Get health score for this path
                                 health_score = 50  # Default
@@ -1127,7 +1151,7 @@ with tab4:
                                     'Level_0': level0_name,
                                     'Level_1': level1_name if level1_name else 'Unknown',
                                     'Level_2': level2_name if level2_name else 'Unknown',
-                                    'Activity_ID': row.get('Activity ID', ''),
+                                    'Activity_ID': act_id,
                                     'Health_Score': health_score,
                                     'Health_Color': health_color,
                                     'Count': 1
@@ -1537,12 +1561,10 @@ with tab6:
 with tab7:
     st.markdown("## Activity Details")
 
-    activities = schedule['schedule_data'].get('activities', [])
-
     if not activities:
         display_no_data_message("No activity data available")
     else:
-        df = pd.DataFrame(activities)
+        df = activities_df
 
         # Select key columns for display
         display_columns = ['Activity ID', 'Activity Name', 'Activity Status']

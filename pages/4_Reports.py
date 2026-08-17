@@ -63,10 +63,9 @@ try:
     schedule = db.get_schedule_by_id(selected_schedule_id)
     analysis = db.get_analysis_by_schedule(selected_schedule_id)
 
-    # Debug logging
-    if analysis:
-        st.sidebar.success(f"✅ Analysis loaded: {len(str(analysis))} chars")
-    else:
+    # NOTE: do not stringify `analysis` here - it is ~3M characters, and this block
+    # re-runs on every widget interaction on this page (~35ms + 3MB allocated each time).
+    if not analysis:
         st.sidebar.warning("⚠️ No analysis found")
 
 except Exception as e:
