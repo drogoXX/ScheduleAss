@@ -2,9 +2,54 @@
 Utility helper functions
 """
 
-import streamlit as st
-from typing import Dict, List, Any
+import html
+from typing import Any, Dict, List
+
 import pandas as pd
+import streamlit as st
+
+from src.config import settings
+from src.logging_config import get_logger, new_error_reference
+from src.ui.theme import COLORS, SEVERITY_COLORS, rating_color, status_badge
+
+logger = get_logger("ui")
+
+
+def esc(value: Any, default: str = "") -> str:
+    """
+    Escape a value for interpolation into markup rendered with
+    ``unsafe_allow_html=True``.
+
+    Analysis content is derived from uploaded CSV files (activity names, WBS
+    labels, resource names), so it is untrusted input. Without escaping, a
+    crafted activity name could inject arbitrary HTML into another user's page.
+    """
+    if value is None:
+        return html.escape(default)
+    return html.escape(str(value))
+
+
+def report_error(user_message: str, exc: BaseException | None = None,
+                 *, logger_name: str = "ui") -> str:
+    """
+    Log an exception in full and show the user a safe message with a reference.
+
+    Stack traces are only rendered in the UI outside production, so internal
+    paths and library versions are not exposed to end users.
+    """
+    reference = new_error_reference()
+    get_logger(logger_name).error(
+        "[%s] %s", reference, user_message,
+        exc_info=exc if exc is not None else False,
+    )
+
+    st.error(f"❌ {user_message}\n\nError reference: `{reference}`")
+
+    if exc is not None and (settings.DEBUG or not settings.is_production):
+        with st.expander("Technical details (non-production only)"):
+            st.exception(exc)
+
+    return reference
 
 
 def display_metric_card(title: str, value: Any, delta: str = None, help_text: str = None):
@@ -16,42 +61,47 @@ def display_metric_card(title: str, value: Any, delta: str = None, help_text: st
 
 def display_health_score(score: float, rating: str):
     """Display health score with color coding"""
-    color_map = {
-        'Excellent': '#28a745',  # Green
-        'Good': '#007bff',       # Blue
-        'Fair': '#ffc107',       # Yellow
-        'Poor': '#fd7e14',       # Orange
-        'Critical': '#dc3545'    # Red
-    }
+    color = rating_color(rating)
 
-    color = color_map.get(rating, '#6c757d')
+    try:
+        score_text = f"{float(score):.1f}"
+    except (TypeError, ValueError):
+        score_text = "N/A"
 
     st.markdown(
         f"""
-        <div style="text-align: center; padding: 20px; background-color: {color};
-                    border-radius: 10px; color: white;">
-            <h1 style="margin: 0; font-size: 3em;">{score:.1f}</h1>
-            <h3 style="margin: 0;">{rating}</h3>
-            <p style="margin: 5px 0 0 0;">Schedule Health Score</p>
+        <div class="health-card" style="background-color: {color};">
+            <p class="health-value">{esc(score_text)}</p>
+            <p class="health-rating">{esc(rating)}</p>
+            <p class="health-caption">Schedule Health Score</p>
         </div>
         """,
         unsafe_allow_html=True
     )
 
 
+#: Check-result vocabulary -> badge variant in src/ui/theme.py.
+_STATUS_VARIANTS = {
+    'pass': 'success',
+    'good': 'success',
+    'warning': 'warning',
+    'fail': 'danger',
+    'unknown': 'neutral',
+}
+
+#: Severity / priority vocabulary -> badge variant.
+_SEVERITY_VARIANTS = {
+    'critical': 'danger',
+    'high': 'danger',
+    'medium': 'warning',
+    'low': 'success',
+}
+
+
 def display_status_badge(status: str):
     """Display status badge with color"""
-    color_map = {
-        'pass': 'green',
-        'warning': 'orange',
-        'fail': 'red',
-        'unknown': 'gray'
-    }
-
-    color = color_map.get(status.lower(), 'gray')
-
-    return f'<span style="background-color: {color}; color: white; padding: 3px 10px; \
-              border-radius: 5px; font-weight: bold;">{status.upper()}</span>'
+    variant = _STATUS_VARIANTS.get(str(status).lower(), 'neutral')
+    return status_badge(str(status).upper(), variant)
 
 
 def format_large_number(num: int) -> str:
@@ -60,13 +110,13 @@ def format_large_number(num: int) -> str:
 
 
 def get_priority_color(priority: str) -> str:
-    """Get color for priority level"""
-    color_map = {
-        'high': '#dc3545',
-        'medium': '#ffc107',
-        'low': '#28a745'
-    }
-    return color_map.get(priority.lower(), '#6c757d')
+    """
+    Get colour for a priority level.
+
+    Only ever returns a value from the fixed map, so the result is safe to
+    interpolate into a style attribute.
+    """
+    return SEVERITY_COLORS.get(str(priority).lower(), COLORS['text_muted'])
 
 
 def create_download_button(file_data: bytes, file_name: str, button_text: str, mime_type: str):
@@ -81,27 +131,21 @@ def create_download_button(file_data: bytes, file_name: str, button_text: str, m
 
 
 def display_issue_card(issue: Dict):
-    """Display an issue as a card"""
-    priority_color = get_priority_color(issue['severity'])
+    """Display an issue as a card. All content is CSV-derived, so it is escaped."""
+    severity = str(issue.get('severity', 'unknown'))
+    priority_color = get_priority_color(severity)
 
     st.markdown(
         f"""
-        <div style="border-left: 4px solid {priority_color}; padding: 10px;
-                    margin: 10px 0; background-color: #f8f9fa; border-radius: 5px;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <h4 style="margin: 0; color: {priority_color};">{issue['title']}</h4>
-                <span style="background-color: {priority_color}; color: white;
-                             padding: 3px 10px; border-radius: 5px; font-size: 0.8em;">
-                    {issue['severity'].upper()}
-                </span>
+        <div class="issue-card" style="border-left-color: {priority_color};">
+            <div class="card-head">
+                <p class="card-title" style="color: {priority_color};">{esc(issue.get('title'))}</p>
+                {status_badge(severity.upper(), _SEVERITY_VARIANTS.get(severity.lower(), 'neutral'))}
             </div>
-            <p style="margin: 10px 0 5px 0; color: #495057;">{issue['description']}</p>
-            <p style="margin: 5px 0; color: #6c757d; font-style: italic;">
-                <strong>Recommendation:</strong> {issue['recommendation']}
-            </p>
-            <p style="margin: 5px 0 0 0; color: #6c757d; font-size: 0.9em;">
-                Affected activities: {issue.get('count', 0)}
-            </p>
+            <p class="card-body">{esc(issue.get('description'))}</p>
+            <p class="card-muted"><em><strong>Recommendation:</strong>
+                {esc(issue.get('recommendation'))}</em></p>
+            <p class="card-muted">Affected activities: {esc(issue.get('count', 0))}</p>
         </div>
         """,
         unsafe_allow_html=True
@@ -109,30 +153,26 @@ def display_issue_card(issue: Dict):
 
 
 def display_recommendation_card(rec: Dict, index: int):
-    """Display a recommendation as a card"""
-    priority_color = get_priority_color(rec['priority'])
+    """Display a recommendation as a card. Content is escaped (CSV-derived)."""
+    priority = str(rec.get('priority', 'low'))
 
     st.markdown(
         f"""
-        <div style="border: 1px solid #dee2e6; padding: 15px; margin: 10px 0;
-                    border-radius: 5px; background-color: white;">
-            <div style="display: flex; justify-content: space-between; align-items: start;">
-                <h4 style="margin: 0; color: #212529;">
-                    {index}. {rec['title']}
-                </h4>
-                <span style="background-color: {priority_color}; color: white;
-                             padding: 3px 10px; border-radius: 5px; font-size: 0.8em;">
-                    {rec['priority'].upper()}
-                </span>
+        <div class="rec-card">
+            <div class="card-head">
+                <p class="card-title" style="color: {COLORS['text']};">
+                    {esc(index)}. {esc(rec.get('title'))}
+                </p>
+                {status_badge(priority.upper(), _SEVERITY_VARIANTS.get(priority.lower(), 'neutral'))}
             </div>
-            <p style="margin: 10px 0;"><strong>Category:</strong> {rec['category']}</p>
-            <p style="margin: 5px 0;"><strong>Description:</strong> {rec['description']}</p>
-            <p style="margin: 5px 0; color: #007bff;">
-                <strong>Recommendation:</strong> {rec['recommendation']}
+            <p class="card-body"><strong>Category:</strong> {esc(rec.get('category'))}</p>
+            <p class="card-body"><strong>Description:</strong> {esc(rec.get('description'))}</p>
+            <p class="card-body" style="color: {COLORS['primary']};">
+                <strong>Recommendation:</strong> {esc(rec.get('recommendation'))}
             </p>
-            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #dee2e6;">
-                <span style="margin-right: 15px;"><strong>Impact:</strong> {rec['impact']}</span>
-                <span><strong>Effort:</strong> {rec['effort']}</span>
+            <div class="card-footer">
+                <span style="margin-right: 15px;"><strong>Impact:</strong> {esc(rec.get('impact'))}</span>
+                <span><strong>Effort:</strong> {esc(rec.get('effort'))}</span>
             </div>
         </div>
         """,

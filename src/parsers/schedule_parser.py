@@ -3,13 +3,19 @@ Schedule Parser for P6 CSV exports
 Parses and validates Primavera P6 schedule data
 """
 
+import csv
+
 import pandas as pd
 import numpy as np
 import re
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
 import io
+from src.config import settings
+from src.logging_config import get_logger
 from src.parsers.wbs_parser import WBSParser
+
+logger = get_logger("parser")
 
 
 class ScheduleParser:
@@ -60,8 +66,14 @@ class ScheduleParser:
         self.warnings = []
 
         try:
-            # Read CSV into DataFrame
-            df = pd.read_csv(io.BytesIO(file_content))
+            df = self._read_csv(file_content)
+
+            if df is None:
+                return {
+                    'success': False,
+                    'errors': self.errors,
+                    'warnings': self.warnings,
+                }
 
             # Validate columns
             validation_result = self._validate_columns(df)
@@ -101,11 +113,114 @@ class ScheduleParser:
             return schedule_data
 
         except Exception as e:
+            logger.exception("Unhandled error parsing %r", file_name)
             return {
                 'success': False,
                 'errors': [f"Failed to parse CSV file: {str(e)}"],
                 'warnings': self.warnings
             }
+
+    # Encodings tried in order. P6 on Windows commonly exports cp1252, and
+    # Excel round-trips often add a UTF-8 BOM.
+    _ENCODINGS = ('utf-8-sig', 'utf-8', 'cp1252', 'latin-1')
+
+    def _read_csv(self, file_content: bytes) -> Optional[pd.DataFrame]:
+        """
+        Read raw bytes into a DataFrame, enforcing size limits and tolerating
+        the encodings P6 actually produces.
+
+        Returns None and populates self.errors when the input is unusable.
+        """
+        if not file_content:
+            self.errors.append("The uploaded file is empty.")
+            return None
+
+        size = len(file_content)
+        if size > settings.max_upload_bytes:
+            self.errors.append(
+                f"File is {size / 1024 / 1024:.1f} MB, which exceeds the "
+                f"{settings.MAX_UPLOAD_MB} MB limit."
+            )
+            return None
+
+        text: Optional[str] = None
+        last_error: Optional[Exception] = None
+        for encoding in self._ENCODINGS:
+            try:
+                text = file_content.decode(encoding)
+                if encoding != self._ENCODINGS[0]:
+                    self.warnings.append(f"File was read using '{encoding}' encoding.")
+                break
+            except UnicodeDecodeError as exc:
+                last_error = exc
+                continue
+
+        if text is None:
+            self.errors.append(
+                f"Could not decode the file as text (tried "
+                f"{', '.join(self._ENCODINGS)}). Re-export it as UTF-8 CSV. "
+                f"Details: {last_error}"
+            )
+            return None
+
+        # Duplicate headers must be caught on the raw header line: pandas
+        # silently renames the second occurrence (e.g. 'Total Float.1'), so by
+        # the time we have a DataFrame the collision is no longer visible and
+        # one of the two columns would be ignored without explanation.
+        duplicates = self._duplicate_headers(text)
+        if duplicates:
+            self.errors.append(
+                f"The file has duplicate column headers: {', '.join(duplicates)}. "
+                f"Re-export with unique column names."
+            )
+            return None
+
+        try:
+            df = pd.read_csv(io.StringIO(text))
+        except pd.errors.EmptyDataError:
+            self.errors.append("The uploaded file contains no data.")
+            return None
+        except pd.errors.ParserError as exc:
+            self.errors.append(
+                f"The file is not valid CSV and could not be read: {exc}"
+            )
+            return None
+
+        if df.empty:
+            self.errors.append("The file contains column headers but no activity rows.")
+            return None
+
+        if len(df) > settings.MAX_ACTIVITIES:
+            self.errors.append(
+                f"The schedule has {len(df):,} activities, which exceeds the "
+                f"supported maximum of {settings.MAX_ACTIVITIES:,}."
+            )
+            return None
+
+        # Drop unnamed padding columns that trailing commas in P6 exports create.
+        unnamed = [c for c in df.columns if str(c).startswith("Unnamed:")]
+        if unnamed:
+            df = df.drop(columns=unnamed)
+
+        return df
+
+    @staticmethod
+    def _duplicate_headers(text: str) -> List[str]:
+        """Return any column names that appear more than once in the header row."""
+        lines = text.splitlines()
+        if not lines:
+            return []
+
+        try:
+            header = next(csv.reader([lines[0]]))
+        except (StopIteration, csv.Error):
+            return []
+
+        seen: Dict[str, int] = {}
+        for name in (h.strip() for h in header):
+            if name:
+                seen[name] = seen.get(name, 0) + 1
+        return sorted(name for name, count in seen.items() if count > 1)
 
     def _validate_columns(self, df: pd.DataFrame) -> Dict:
         """Validate that required columns are present"""
@@ -198,13 +313,144 @@ class ScheduleParser:
 
         return df
 
-    def _parse_dates(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Parse date columns"""
-        date_columns = ['Start', 'Finish']
+    # Matches the leading numeric day/month pair of a slash/dash/dot date.
+    _NUMERIC_DATE_RE = re.compile(r'^\s*(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})')
+    # Year-first (ISO 8601) dates, which are never day/month ambiguous.
+    _ISO_DATE_RE = re.compile(r'^\s*\d{4}[-/]\d{1,2}[-/]\d{1,2}')
 
-        for col in date_columns:
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col], errors='coerce')
+    DATE_COLUMNS = ['Start', 'Finish']
+
+    def _has_iso_dates(self, df: pd.DataFrame) -> bool:
+        """
+        True when dates are year-first (e.g. 2025-04-03) and no ambiguous
+        numeric dates are present.
+
+        This must be checked before applying any day-first preference: pandas
+        honours ``dayfirst`` for year-first strings too, so parsing an ISO date
+        with dayfirst=True reads 2025-04-03 as 4 March.
+        """
+        iso_seen = False
+        for col in self.DATE_COLUMNS:
+            if col not in df.columns:
+                continue
+            for value in df[col].dropna().astype(str):
+                if self._NUMERIC_DATE_RE.match(value):
+                    return False
+                if self._ISO_DATE_RE.match(value):
+                    iso_seen = True
+        return iso_seen
+
+    def _detect_date_order(self, df: pd.DataFrame) -> str:
+        """
+        Determine whether numeric dates are day-first (dd/mm/yyyy) or
+        month-first (mm/dd/yyyy).
+
+        P6 exports the host machine's locale format with no indication of which
+        it used. Left to itself, pandas infers the format from the first
+        non-null value only: if that value happens to be ambiguous (e.g.
+        03/04/2025) it locks in month-first for the whole column, silently
+        shifting dates by months and turning genuine day-first values such as
+        29/08/2025 into NaT.
+
+        Detection uses every date in the file: a first component above 12 can
+        only be a day, a second component above 12 can only be a month.
+
+        Returns 'day', 'month', 'conflict' (both seen - data is inconsistent),
+        or 'ambiguous' (no value is decisive).
+        """
+        first_over_12 = 0
+        second_over_12 = 0
+
+        for col in self.DATE_COLUMNS:
+            if col not in df.columns:
+                continue
+            for value in df[col].dropna().astype(str):
+                match = self._NUMERIC_DATE_RE.match(value)
+                if not match:
+                    continue
+                first, second = int(match.group(1)), int(match.group(2))
+                if first > 12:
+                    first_over_12 += 1
+                if second > 12:
+                    second_over_12 += 1
+
+        if first_over_12 and second_over_12:
+            return 'conflict'
+        if first_over_12:
+            return 'day'
+        if second_over_12:
+            return 'month'
+        return 'ambiguous'
+
+    def _parse_dates(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Parse date columns using a single, explicitly determined day/month
+        order for the whole file, and report values that could not be parsed.
+        """
+        # Year-first dates are unambiguous, and applying a day/month preference
+        # to them actively corrupts the result, so they short-circuit both
+        # detection and configuration.
+        if self._has_iso_dates(df):
+            return self._apply_date_parsing(df, dayfirst=False)
+
+        configured = settings.DATE_ORDER
+        if configured in ('day', 'dayfirst', 'dmy'):
+            order, source = 'day', 'configuration'
+        elif configured in ('month', 'monthfirst', 'mdy'):
+            order, source = 'month', 'configuration'
+        else:
+            order, source = self._detect_date_order(df), 'detection'
+
+        if order == 'conflict':
+            self.warnings.append(
+                "Dates are inconsistent: the file contains both day-first "
+                "(e.g. 29/08/2025) and month-first (e.g. 08/29/2025) values. "
+                "Parsing as day-first; verify the schedule dates in the results, "
+                "or re-export with an unambiguous date format (YYYY-MM-DD)."
+            )
+            dayfirst = True
+        elif order == 'ambiguous':
+            # No value in the file distinguishes the two orders. Any choice is a
+            # guess, so state it rather than let it pass silently.
+            self.warnings.append(
+                "Date format is ambiguous: every date in this file could be read "
+                "as either day-first or month-first. Assuming day-first "
+                "(dd/mm/yyyy). Set APP_DATE_ORDER=month if this schedule was "
+                "exported with US-style dates."
+            )
+            dayfirst = True
+        else:
+            dayfirst = (order == 'day')
+            if source == 'detection':
+                self.warnings.append(
+                    f"Detected {'day-first (dd/mm/yyyy)' if dayfirst else 'month-first (mm/dd/yyyy)'} "
+                    f"date format."
+                )
+
+        return self._apply_date_parsing(df, dayfirst=dayfirst)
+
+    def _apply_date_parsing(self, df: pd.DataFrame, *, dayfirst: bool) -> pd.DataFrame:
+        """Convert the date columns using a fixed order, reporting bad values."""
+        for col in self.DATE_COLUMNS:
+            if col not in df.columns:
+                continue
+
+            original = df[col]
+            parsed = pd.to_datetime(original, errors='coerce', dayfirst=dayfirst)
+
+            # Values that were present but could not be interpreted are data
+            # quality problems the user needs to know about - previously they
+            # became NaT with no indication.
+            unparsed = original.notna() & parsed.isna()
+            unparsed_count = int(unparsed.sum())
+            if unparsed_count:
+                examples = original[unparsed].astype(str).unique()[:3]
+                self.warnings.append(
+                    f"{unparsed_count} value(s) in '{col}' could not be read as a "
+                    f"date and were left empty (e.g. {', '.join(examples)})."
+                )
+
+            df[col] = parsed
 
         return df
 

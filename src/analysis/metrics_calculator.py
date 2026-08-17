@@ -7,6 +7,8 @@ import pandas as pd
 import numpy as np
 from typing import Dict
 
+from src.analysis import health_score
+
 
 class MetricsCalculator:
     """Calculates advanced schedule performance metrics"""
@@ -33,8 +35,12 @@ class MetricsCalculator:
         # Calculate BEI (Baseline Execution Index)
         metrics['bei'] = self._calculate_bei()
 
-        # Calculate Schedule Health Score
-        metrics['health_score'] = self._calculate_health_score()
+        # Calculate Schedule Health Score. CPLI and BEI feed into it, so they
+        # are passed in rather than recomputed.
+        metrics['health_score'] = self._calculate_health_score(
+            cpli_value=metrics['cpli'].get('value'),
+            bei_value=metrics['bei'].get('value'),
+        )
 
         # Calculate overall statistics
         metrics['statistics'] = self._calculate_statistics()
@@ -81,14 +87,26 @@ class MetricsCalculator:
                 'description': 'Duration data not available'
             }
 
-        # Estimate critical path length
+        # Estimate critical path length. Fall back to summing critical activity
+        # durations when the schedule has no usable dates.
+        critical_path_duration = 0
         if 'Start' in self.df.columns and 'Finish' in self.df.columns:
-            critical_path_duration = (self.df['Finish'].max() - self.df['Start'].min()).days
-        else:
-            critical_path_duration = critical_activities[duration_col].sum()
+            earliest = pd.to_datetime(self.df['Start'], errors='coerce').min()
+            latest = pd.to_datetime(self.df['Finish'], errors='coerce').max()
+            if pd.notna(earliest) and pd.notna(latest):
+                critical_path_duration = (latest - earliest).days
+
+        if not critical_path_duration or critical_path_duration <= 0:
+            critical_path_duration = pd.to_numeric(
+                critical_activities[duration_col], errors='coerce').sum()
+
+        if pd.isna(critical_path_duration):
+            critical_path_duration = 0
 
         # Average total float
         avg_total_float = self.df['Total Float'].mean()
+        if pd.isna(avg_total_float):
+            avg_total_float = 0.0
 
         # Calculate CPLI
         if critical_path_duration > 0:
@@ -169,88 +187,20 @@ class MetricsCalculator:
             'description': 'Baseline Execution Index measures schedule adherence'
         }
 
-    def _calculate_health_score(self) -> Dict:
+    def _calculate_health_score(self, cpli_value=None, bei_value=None) -> Dict:
         """
-        Calculate overall schedule health score (0-100)
-        Based on DCMA compliance metrics
+        Calculate the overall schedule health score (0-100).
+
+        Delegates to src.analysis.health_score, where the DCMA thresholds and
+        the weighting are defined and documented in one place. See that module
+        for the rationale behind each weight.
         """
-        score = 100.0
-        deductions = []
-
-        # Negative lags: -10 points per negative lag (max -30)
-        neg_lags = self.dcma_metrics.get('negative_lags', {}).get('count', 0)
-        if neg_lags > 0:
-            deduction = min(neg_lags * 10, 30)
-            score -= deduction
-            deductions.append(f"Negative lags: -{deduction}")
-
-        # Positive lags: -1 point per % over 5% (max -10)
-        pos_lag_pct = self.dcma_metrics.get('positive_lags', {}).get('percentage', 0)
-        if pos_lag_pct > 5:
-            deduction = min((pos_lag_pct - 5) * 1, 10)
-            score -= deduction
-            deductions.append(f"Excessive positive lags: -{deduction:.1f}")
-
-        # Hard constraints: -2 points per % over 10% (max -20)
-        constraint_pct = self.dcma_metrics.get('hard_constraints', {}).get('percentage', 0)
-        if constraint_pct > 10:
-            deduction = min((constraint_pct - 10) * 2, 20)
-            score -= deduction
-            deductions.append(f"Excessive hard constraints: -{deduction:.1f}")
-
-        # Missing logic: -5 points per activity with missing logic (max -25)
-        missing_logic = self.dcma_metrics.get('missing_logic', {}).get('count', 0)
-        if missing_logic > 0:
-            deduction = min(missing_logic * 5, 25)
-            score -= deduction
-            deductions.append(f"Missing logic: -{deduction}")
-
-        # Long duration activities: -1 point per activity over 5 months (max -10)
-        very_long = len(self.dcma_metrics.get('long_durations', {}).get('activities_5_months', []))
-        if very_long > 0:
-            deduction = min(very_long * 1, 10)
-            score -= deduction
-            deductions.append(f"Very long durations: -{deduction}")
-
-        # CPLI bonus/penalty
-        cpli_value = self._calculate_cpli().get('value', 0)
-        if cpli_value > 0:
-            if cpli_value < 0.90:
-                deduction = 15
-                score -= deduction
-                deductions.append(f"Low CPLI: -{deduction}")
-            elif cpli_value >= 0.95:
-                bonus = 5
-                score += bonus
-                deductions.append(f"Good CPLI: +{bonus}")
-
-        # Ensure score is between 0 and 100
-        score = max(0, min(100, score))
-
-        # Determine health rating
-        if score >= 90:
-            rating = 'Excellent'
-            color = 'green'
-        elif score >= 75:
-            rating = 'Good'
-            color = 'blue'
-        elif score >= 60:
-            rating = 'Fair'
-            color = 'yellow'
-        elif score >= 40:
-            rating = 'Poor'
-            color = 'orange'
-        else:
-            rating = 'Critical'
-            color = 'red'
-
-        return {
-            'score': round(score, 1),
-            'rating': rating,
-            'color': color,
-            'deductions': deductions,
-            'description': f'Overall schedule health: {rating} ({score:.1f}/100)'
-        }
+        return health_score.calculate(
+            dcma_metrics=self.dcma_metrics,
+            total_activities=len(self.df),
+            cpli_value=cpli_value,
+            bei_value=bei_value,
+        )
 
     def _calculate_statistics(self) -> Dict:
         """Calculate general schedule statistics"""

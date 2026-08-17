@@ -1,14 +1,60 @@
+# Palette is mirrored in src/ui/theme.py (COLORS) and src/reports/docx_styles.py
+# so the screen and the exported reports cannot drift. Edit all three together.
 [theme]
-primaryColor = "#1f77b4"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f0f2f6"
-textColor = "#262730"
+base = "light"
+primaryColor = "#004B87"             # Deep corporate blue
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F5F5F5" # Cards, widget backgrounds
+textColor = "#212121"
+linkColor = "#004B87"
+borderColor = "#E0E0E0"
+baseRadius = "medium"
 font = "sans serif"
 
+[theme.sidebar]
+backgroundColor = "#F5F5F5"
+secondaryBackgroundColor = "#EEF3F8"
+textColor = "#212121"
+borderColor = "#E0E0E0"
+
 [server]
+# Keep in step with APP_MAX_UPLOAD_MB: this guards the transport layer, the
+# environment variable is enforced in application code.
 maxUploadSize = 50
+
+# The source-file watcher is disabled deliberately.
+#
+# This project lives inside a OneDrive-synced folder, and the default "auto"
+# watcher puts a watchdog observer on every directory holding an imported
+# module. Cloud-sync activity in that tree generates a stream of filesystem
+# events, which on Windows is a known cause of sessions being torn down and
+# recreated - the browser shows that as a blank page that keeps reconnecting.
+#
+# Nothing is lost: runOnSave is already false, so the watcher never triggered a
+# rerun; it only produced the "source file changed" prompt. Restart the server
+# to pick up code changes.
+fileWatcherType = "none"
+
+# Belt and braces if the watcher is ever re-enabled: never watch the runtime
+# data directory (the SQLite database and rotating logs are written there on
+# normal use) or the bulky input folders.
+folderWatchBlacklist = ["instance", "archive", "input", "Schedule extract", ".git", "tests"]
+
+# CSRF protection requires the matching CORS policy, so enableCORS is left at
+# its default of true. Setting it to false here was overridden by Streamlit at
+# startup and only produced a warning.
 enableXsrfProtection = true
-enableCORS = false
+
+[client]
+# Do not surface tracebacks in the browser; errors are logged server-side and
+# shown to users with a reference id instead.
+showErrorDetails = "none"
+
+# Hide the developer toolbar (Rerun / Clear cache) from end users.
+toolbarMode = "minimal"
 
 [browser]
 gatherUsageStats = false
+
+[logger]
+level = "info"

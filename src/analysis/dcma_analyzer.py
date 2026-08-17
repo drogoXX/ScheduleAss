@@ -8,11 +8,12 @@ import numpy as np
 from typing import Dict, List, Tuple
 from datetime import datetime
 
+from src.ui.palette import RATING_COLORS
+
 
 class DCMAAnalyzer:
     """
-    Analyzes schedules based on DCMA 14-Point Assessment
-    and GAO Schedule Assessment Guide best practices
+    Analyzes schedules based on the DCMA 14-Point Assessment
     """
 
     def __init__(self, schedule_data: Dict):
@@ -43,6 +44,28 @@ class DCMAAnalyzer:
         if self._records_cache is None:
             self._records_cache = self.df.to_dict('records')
         return self._records_cache
+
+    def _project_duration_days(self) -> int:
+        """
+        Span from the earliest start to the latest finish, in days.
+
+        Returns 0 when dates are missing or unusable. Schedules exported
+        without dates, or with every date unparseable, otherwise produce NaT
+        arithmetic that raises part-way through the analysis.
+        """
+        if 'Start' not in self.df.columns or 'Finish' not in self.df.columns:
+            return 0
+
+        earliest_start = pd.to_datetime(self.df['Start'], errors='coerce').min()
+        latest_finish = pd.to_datetime(self.df['Finish'], errors='coerce').max()
+
+        if pd.isna(earliest_start) or pd.isna(latest_finish):
+            return 0
+
+        duration = (latest_finish - earliest_start).days
+        # A finish before the earliest start means the dates are inconsistent;
+        # treat the span as unknown rather than propagating a negative duration.
+        return int(duration) if duration and duration > 0 else 0
 
     def analyze(self) -> Dict:
         """
@@ -488,11 +511,11 @@ class DCMAAnalyzer:
 
         if 'Total Float' in self.df.columns:
             # Calculate project duration for threshold
-            if 'Start' in self.df.columns and 'Finish' in self.df.columns:
-                project_duration = int((self.df['Finish'].max() - self.df['Start'].min()).days)
+            project_duration = self._project_duration_days()
+            if project_duration > 0:
                 float_threshold = float(project_duration * 0.5)  # 50% of project duration
             else:
-                float_threshold = 100  # Default threshold
+                float_threshold = 100  # Default when the project span is unknown
 
             for row in self._rows():
                 total_float = row.get('Total Float', 0)
@@ -556,9 +579,7 @@ class DCMAAnalyzer:
             return
 
         # Calculate project duration for context
-        project_duration = 0
-        if 'Start' in self.df.columns and 'Finish' in self.df.columns:
-            project_duration = int((self.df['Finish'].max() - self.df['Start'].min()).days)
+        project_duration = self._project_duration_days()
 
         # KPI 1: Critical Path (float = 0)
         critical_mask = float_series == 0
@@ -1098,7 +1119,19 @@ class DCMAAnalyzer:
         # Determine data date (use earliest start as proxy if not available)
         data_date = self.schedule_data.get('data_date')
         if data_date is None:
-            data_date = self.df['Start'].min()
+            data_date = pd.to_datetime(self.df['Start'], errors='coerce').min()
+
+        if pd.isna(data_date):
+            # Without any usable date there is no reference point for the
+            # "more than 5 years out" check, so skip it rather than crash.
+            self.metrics['invalid_dates'] = {
+                'count': 0,
+                'activities': [],
+                'target': 0,
+                'status': 'unknown',
+                'description': 'No usable dates in the schedule',
+            }
+            return
 
         # 5 years from data date
         five_years_future = pd.Timestamp(data_date) + pd.DateOffset(years=5)
@@ -1702,22 +1735,21 @@ class DCMAAnalyzer:
         # Calculate total score
         total_score = critical_score + float_score + negative_score + distribution_score
 
-        # Determine rating and color
+        # Determine rating. The colour is presentation only and comes from the
+        # shared palette in src/ui/theme.py so the dashboard, the charts and the
+        # exported reports all render a given rating identically.
         if total_score >= 80:
             rating = 'Excellent'
-            color = '#27ae60'  # Green
         elif total_score >= 65:
             rating = 'Good'
-            color = '#2ecc71'  # Light green
         elif total_score >= 50:
             rating = 'Fair'
-            color = '#f39c12'  # Orange
         elif total_score >= 35:
             rating = 'Poor'
-            color = '#e67e22'  # Dark orange
         else:
             rating = 'Critical'
-            color = '#e74c3c'  # Red
+
+        color = RATING_COLORS[rating]
 
         return {
             'score': round(total_score, 1),
