@@ -1,27 +1,69 @@
 # Schedule Assessment Platform — Technical Specification v2.0
 
-**Status:** Option A (targeted refactor) in progress — see §17 for status and next steps
-**Date:** 17 August 2026 (revised same day against `main` @ `8a1d3de`)
+**Status:** Living document — Option A (targeted refactor) underway. **Start at §0, then §17.**
+**Date:** 17 August 2026 · status verified against `main` @ `bd6f0af`
+**Maintenance:** update §17 whenever an increment lands; re-verify claims before relying on them (§0)
 **Supersedes:** `Schedule_Quality_Analyzer_PRD.md`
-**Target repository:** `github.com/drogoXX/ScheduleAss` (clean rewrite, history retained)
+**Repository:** `github.com/drogoXX/ScheduleAss`
+
+---
+
+## 0. How to pick this up
+
+This document is the working specification for the schedule assessment application. It is
+**maintained alongside the code**, not written once — several sections were invalidated within
+hours of first drafting because `main` moved underneath them.
+
+**Read in this order:**
+
+1. **§17 — Implementation status.** What is built, what is not, and the recommended sequence.
+   Start here; it is the entry point and the only section that must be re-verified before acting.
+2. **§7.1 — The three defensibility defects.** The reason this work exists.
+3. **§14 — Decisions taken**, with their consequences.
+4. Everything else as reference.
+
+**Before acting on any section, re-verify it against the code.** This document has been wrong
+three times, in each case because the repository advanced. Specifically:
+
+- The original §3 listed seven things to remove; four were independently fixed on `main` while the
+  document was being written.
+- §8 proposed replacing the health score; `src/analysis/health_score.py` had already replaced it,
+  and better than proposed.
+- §13 planned a clean-slate rewrite; that plan is withdrawn (§16).
+
+A five-minute `grep` against the claim you are about to rely on is cheaper than building against a
+stale premise. §17.1 lists what was verified and at which commit.
+
+**Two dependencies are on people, not code**, and both gate real scope — start them early:
+
+- Baseline XER exports (§14.2) gate DCMA 11 and 14.
+- The DCMA 12 attestation workflow (§14.3) needs an analyst who will actually perform the test.
 
 ---
 
 ## 1. Purpose
 
-This specification defines a ground-up rebuild of the schedule assessment application. The
-existing codebase works and encodes real domain knowledge, but its architecture has degraded
-to the point where correctness can no longer be demonstrated: the "database" is a dictionary
-in browser session memory, analysis results embed megabytes of duplicated activity data, and
-several DCMA checks silently substitute fabricated inputs when real ones are absent.
+This specification governs the schedule assessment application. It was drafted as a ground-up
+rebuild; that framing is now **superseded by §16**, which resolves the work as a targeted refactor
+of the existing codebase.
 
-The rebuild has one governing objective: **every number the application prints must be
-traceable to a documented rule, a declared denominator, and the specific activities that
-produced it.** An assessment that cannot be defended in a schedule review meeting has no value,
-regardless of how fast it renders.
+One governing objective survives unchanged, and it is the reason the document exists:
 
-Scope is deliberately narrowed to the **DCMA 14-Point Assessment** only. GAO framework content,
-the parallel "comprehensive float" analysis, and the ad-hoc health scoring are removed.
+> **Every number the application prints must be traceable to a documented rule, a declared
+> denominator, and the specific activities that produced it.**
+
+An assessment that cannot be defended in a schedule review meeting has no value, regardless of how
+fast it renders or how polished it looks. The application's remaining defects are all failures of
+this principle: checks that substitute a fabricated input when the real one is absent, and then
+report the result as though it were measured (§7.1).
+
+Scope is deliberately narrowed to the **DCMA 14-Point Assessment** only. GAO framework content and
+the parallel "comprehensive float" analysis are removed — a partial second framework is worse than
+none.
+
+*Historical note:* the original draft also cited a `session_state`-backed "database" and hardcoded
+credentials. Both were fixed on `main` independently while this was being written (§3.1). The
+citation is retained only so the document's own revision history is legible.
 
 ---
 
@@ -73,6 +115,11 @@ Hard-won and correct. These were fixed in commits `02f288f` and `02edcbb` and mu
   `Start On`, `Finish On`, `Mandatory Start`, `Mandatory Finish`), Flexible (`Start On or After`
   and the other three boundary forms), Schedule-Driven (`As Late As Possible`, `As Soon As
   Possible`) — is more useful than a hard/soft binary and is retained.
+- **Summary (rollup) rows are excluded from every check.** Established for Microsoft Project, where
+  rollups are emitted inline as tasks. A rollup has no logic of its own and its dates derive from
+  its children. Full rationale and measured impact in §6.5. **This belongs with the milestone and
+  completed-activity exclusions above: all three exist because a check is only as good as its
+  declared denominator.**
 
 ### 2.4 WBS hierarchy decomposition
 
@@ -323,6 +370,11 @@ piece of metadata the assessment depends on, while the XER carries all of it nat
 | **P6 XER** | **Required, Phase 1** | Data date, scheduled/planned finish, per-activity calendars, typed relationships, resource assignments, WBS tree, scheduling options. Full assessment possible. |
 | P6 CSV export | Required, Phase 1 | Activities, float, typed relationships via Details columns. **No** data date, calendars, resources or baseline. Degraded assessment; missing inputs prompted or reported `NOT_ASSESSABLE`. |
 | P6 XLSX export | Required, Phase 1 | As CSV. Note the two dialects below. |
+| **MS Project CSV** | **Implemented** | Activities, float, typed relationships, WBS outline path, explicit milestone and summary flags. **No** data date, calendars, resources, status or baseline. See §6.5 — this format has two behaviours that corrupt an assessment if handled naively. |
+
+Format is detected from the **header row, not the filename** (`src/core/ingest/formats.py`). P6 and
+MS Project both export plain `.csv` and users rename files freely, so filename-based dispatch would
+misroute exports. Detection is by column signature with a minimum-hit threshold.
 
 **Two distinct XLSX dialects exist in real use** and both must be supported by the alias table:
 a human-readable dialect (`Activity ID`, `Total Float`) and a raw P6 internal-field dialect
@@ -341,6 +393,7 @@ in §14:
 | `P6_Extract.csv` | ❌ | ❌ | ❌ no resource column | ❌ | ✅ Details columns |
 | `Schedule export.csv` | ❌ | ❌ | ❌ | ❌ | ✅ Details columns |
 | `*.xlsx` (raw dialect) | ❌ | ❌ | ❌ | ⚠️ `var_start_date` / `var_end_date` variance fields only | ✅ `pred_details` |
+| `VRATO/Project12.csv` (MS Project) | ❌ | ❌ | ❌ no resource column | ❌ | ⚠️ complete in `Predecessors`; `Successors` truncated — see §6.5 |
 
 Two consequences worth stating plainly. **DCMA 10 (Resources) is not assessable from any CSV
 export** — no resource or cost column exists in any of them. And the XLSX variance fields imply a
@@ -378,6 +431,72 @@ Ordered, each step pure and independently testable:
 The `IngestReport` is persisted and surfaced in both the UI and the DOCX methodology appendix.
 A schedule where 12% of `Total Float` values failed numeric coercion produces a materially
 different assessment, and the reader must be told.
+
+### 6.5 Microsoft Project CSV — implemented, and why it works this way
+
+Implemented in `src/core/ingest/msproject.py`, tested in `tests/test_ingest_msproject.py`, and
+validated against `Schedule extract/VRATO/Project12.csv` (764 activities). MS Project and P6
+describe the same network in different vocabulary, but two of MS Project's CSV writer behaviours
+will silently corrupt an assessment. **Both were found by inspecting real output, not by reading
+documentation, and neither is announced by the file.**
+
+#### Relationship cells are capped at 255 characters
+
+MS Project truncates long relationship lists at exactly 255 characters and appends an ellipsis.
+In the reference export three `Successors` cells hit the cap, silently dropping edges.
+
+The graph is bidirectional, so an edge dropped from a successor list still appears in the
+corresponding predecessor list. Measured on the reference export: the `Predecessors` column yields
+1,098 edges; inverting it yields 1,098 successor edges against only **1,051 stated**, recovering
+exactly the **47 lost edges**, with **zero successor-only edges**.
+
+**Rule: build the graph from `Predecessors` and derive successors by inversion. Never read the
+`Successors` column as authoritative.** Truncation is still counted and reported. A truncated
+*predecessor* cell is reported separately and more loudly, because inversion cannot recover it —
+that export must be regenerated in a format without the cap.
+
+#### Summary rows are emitted as tasks
+
+Where P6 keeps the WBS as separate structure, MS Project interleaves rollup rows with real
+activities — **107 of 764** in the reference export. A rollup has no logic of its own and its
+dates, duration and float are derived from its children, so counting it corrupts both numerator
+and denominator of nearly every check.
+
+Measured impact of excluding them, on the reference export:
+
+| Check | Rollups included | Rollups excluded |
+|---|---|---|
+| Missing predecessors | 133 | **26** |
+| Missing successors | 177 | **71** |
+| Missing logic (total) | 198 | **91** |
+| Long durations | 28.3% | **12.9%** |
+
+**Over half the original missing-logic finding was an artefact of the export format, not a defect
+in the schedule.** Rows are flagged `is_summary_task` at ingest and excluded in `DCMAAnalyzer`.
+The same exclusion is harmless for P6, which has no such column.
+
+#### Translation details worth preserving
+
+- **Encoding is cp1252**, not UTF-8. A strict UTF-8 read fails outright on any accented task name.
+- **Dates carry the operator's locale.** The reference export is `DD.MM.YY`. The reader picks the
+  format by best fit with **day-first preferred**, so an ambiguous `05.06.26` cannot silently flip
+  between month and day across two uploads of the same project.
+- **Durations and slack are strings** — `"827 days"` — with unit conversion required.
+- **Relationships cite the volatile row `ID`; activities are keyed on `Unique_ID`.** `ID` renumbers
+  when tasks are inserted, so using it as the activity key would break version-over-version
+  comparison. The reader remaps references between the two.
+- **Constraint names differ** and are mapped to the P6 vocabulary the analyser categorises
+  (`Start No Earlier Than` → `Start On or After`, and so on). Unmapped values are kept verbatim
+  and warned about rather than dropped.
+
+#### What MS Project CSV cannot support
+
+- **No activity status or % complete.** Status is set to `"Unknown"` and the gap is reported.
+  Emitting `"Not Started"` would be precisely the fabricated-input pattern §7.1 exists to
+  eliminate. Checks scoped to incomplete activities currently assess all activities; once
+  `NOT_ASSESSABLE` is first-class (§17.2, Increment 3) they should report that instead.
+- **No resource or cost data** → DCMA 10 is `NOT_ASSESSABLE`.
+- **No data date, no calendars, no baseline** → same gaps as P6 CSV.
 
 ---
 
@@ -760,7 +879,7 @@ The defaults in §7.3 govern. Two deliberate corrections to current behaviour:
 Per-project overrides are permitted but are stamped into the analysis and printed in the
 methodology appendix. Defaults are locked; overriding is a visible act.
 
-**Consequence:** §13.5's old-vs-new validation must expect these divergences, and any client
+**Consequence:** the validation in §13.3 must expect these divergences, and any client
 holding a prior report should be told the threshold changed rather than the schedule degrading.
 
 ### 14.5 Retention — originals and results retained indefinitely
@@ -885,7 +1004,7 @@ for DCMA 10 being assessable at all.
 **Increment 6 — calendars (§7.4).** Per-activity calendars from XER, declared fallback for CSV,
 basis printed in the report. Makes the 44-day thresholds correct rather than approximately correct.
 
-**Increment 7 — report methodology and limitations appendices (§10.6, §10.7).** The defensibility
+**Increment 7 — report methodology and limitations appendices (§10, items 6 and 7).** The defensibility
 payload. Cheap once the preceding increments supply the metadata to print.
 
 **Increment 8 — evidence capping (§5.4).** Not yet implemented; full populations are still embedded
