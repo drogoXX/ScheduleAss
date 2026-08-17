@@ -44,7 +44,28 @@ with st.sidebar:
 schedules = db.get_all_schedules()
 
 if len(schedules) < 2:
-    display_no_data_message("You need at least 2 schedules to compare. Please upload more schedules.")
+    # Comparison needs two versions by definition. Say so in a way that reads as
+    # an intended state with a next step, not as a page that failed to load.
+    st.info(
+        f"**Comparison needs two schedules.** "
+        f"You currently have {len(schedules)}."
+    )
+    st.markdown(
+        "This page compares two versions of a schedule side by side — health score, "
+        "DCMA results and metric-by-metric movement — so you can see what changed "
+        "between revisions."
+    )
+    if schedules:
+        st.markdown("**Already uploaded:**")
+        for item in schedules:
+            st.markdown(f"- {item['file_name']} (v{item['version_number']})")
+        st.markdown(
+            "Upload a later revision of the same schedule on the **Upload Schedule** "
+            "page, then return here."
+        )
+    else:
+        st.markdown("Upload a schedule on the **Upload Schedule** page to begin.")
+    st.caption("📤 Use **Upload Schedule** in the sidebar to add another version.")
     st.stop()
 
 # Schedule selection

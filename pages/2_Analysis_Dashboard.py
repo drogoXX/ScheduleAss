@@ -103,6 +103,15 @@ st.session_state.current_analysis = analysis
 activities = schedule['schedule_data'].get('activities', [])
 activities_df = pd.DataFrame(activities) if activities else pd.DataFrame()
 
+
+class _TabHasNoData(Exception):
+    """Raised inside a tab to end that tab only.
+
+    Never use st.stop() inside a `with tab:` block: it raises StopException,
+    which subclasses BaseException, escapes `except Exception`, and terminates
+    the whole script - silently dropping every tab below it.
+    """
+
 st.markdown("---")
 
 # Create tabs for different views
@@ -763,11 +772,17 @@ with tab3:
     try:
         st.markdown("## Comprehensive Total Float Analysis")
 
-        # Defensive data validation
+        # Defensive data validation.
+        #
+        # These raise rather than calling st.stop(). st.stop() raises
+        # StopException, which subclasses BaseException, so it escapes the
+        # `except Exception` below and halts the ENTIRE script - taking tabs 4-7
+        # (WBS, Issues, Recommendations, Activities) down with it and leaving the
+        # page looking broken. A tab with no data must end that tab only.
         if 'schedule_data' not in schedule or schedule['schedule_data'] is None:
             st.warning("⚠️ Schedule data not available")
             st.info("Please upload a schedule first to view Float Analysis.")
-            st.stop()
+            raise _TabHasNoData
 
         float_data = metrics.get('comprehensive_float', {})
 
@@ -777,7 +792,7 @@ with tab3:
         if not activities or not isinstance(activities, list):
             st.warning("⚠️ No activity data available for Float Analysis")
             st.info("The schedule data may be incomplete. Please re-upload the schedule.")
-            st.stop()
+            raise _TabHasNoData
 
         # Safely calculate chart data with error handling
         try:
@@ -1144,6 +1159,9 @@ with tab3:
                 - Review and add missing dependencies
                 """)
 
+    except _TabHasNoData:
+        # Already explained to the user above; the remaining tabs still render.
+        pass
     except Exception as e:
         report_error(
             "Float Analysis could not be displayed for this schedule. "
