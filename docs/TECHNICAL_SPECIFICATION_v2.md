@@ -1,6 +1,6 @@
 # Schedule Assessment Platform — Technical Specification v2.0
 
-**Status:** Revised — technical decisions resolved (§14); **delivery approach open (§16)**
+**Status:** Option A (targeted refactor) in progress — see §17 for status and next steps
 **Date:** 17 August 2026 (revised same day against `main` @ `8a1d3de`)
 **Supersedes:** `Schedule_Quality_Analyzer_PRD.md`
 **Target repository:** `github.com/drogoXX/ScheduleAss` (clean rewrite, history retained)
@@ -117,7 +117,7 @@ implementation and the test suite should be moved across largely intact.
 | **Fabricated data date** | `data_date` is never populated; falls back to `df['Start'].min()`. See §7.1. **The single strongest argument for this work.** |
 | **BEI without a baseline** | Not a baseline execution index. See §7.1. |
 | **CPLI approximation** | Self-documented as approximate, printed as the real metric. See §7.1. |
-| **Ad-hoc health score** | Indefensible; see §8. Note `main` added `tests/test_health_score.py`, which pins the current scheme — **read it before changing the scoring, as it encodes the existing behaviour as expected.** |
+| ~~Ad-hoc health score~~ | **Largely resolved.** `src/analysis/health_score.py` now implements a proportional, weight-renormalising, per-component-explainable index. See §17.1. What remains from §8 is leading with the compliance fraction and printing the weights in the report appendix. |
 | GAO framework content | Out of scope. A partial second framework is worse than none. |
 | `comprehensive_float` module | Duplicates DCMA 6 and 7 at different thresholds with no stated basis. |
 | Excel report generator | Superseded by DOCX (§10). Activity export remains available as CSV. |
@@ -839,3 +839,71 @@ testable rules, and extraction achieves that at a fraction of the cost.
 
 If Option A is taken, §13's phasing still applies with Phase 2 reduced to *migration* rather than
 *construction*.
+
+**Decision: Option A taken, 17 August 2026.** Implementation status and sequencing in §17.
+
+---
+
+## 17. Implementation status and next steps
+
+Verified against `main` @ `bd6f0af`. This section is the working plan; update it as increments land.
+
+### 17.1 Delivered
+
+| Item | Where | Note |
+|---|---|---|
+| Real database, WAL enabled | `src/database/` | Production-readiness |
+| PBKDF2-SHA256 auth | `src/auth/security.py` | Production-readiness |
+| Test suite | `tests/` | 253 tests passing |
+| Design system | `src/ui/` | Production-readiness |
+| Row-wise pandas scans removed | `dcma_analyzer` | `analyze()` 2.65 s → 0.45 s |
+| **Weighted quality index (§8.2)** | `src/analysis/health_score.py` | Largely satisfies §8: 12 components, weights summing to 100, linear ramps from threshold to a zero bound, `n/a` components excluded with weights renormalised, per-component explanation. **§8's core complaint is resolved.** |
+| **`core/` package started (§4)** | `src/core/ingest/` | Layer rule holds: no Streamlit, no DB imports |
+| **MS Project CSV ingest (§6.1)** | `src/core/ingest/msproject.py` | 255-char truncation recovered by predecessor inversion; summary rollups excluded |
+
+### 17.2 Outstanding, in recommended order
+
+**Increment 2 — the data date.** The root of all three §7.1 defects and the cheapest high-value fix.
+Capture it at upload (mandatory field, §6.3), persist it on the schedule, and thread it into the
+analyser. Removes the `df['Start'].min()` fallback at `dcma_analyzer.py:1155`, makes DCMA 9
+meaningful, and is the precondition for CPLI.
+
+**Increment 3 — honest CPLI and BEI.** With a data date and a must-finish date, compute CPLI
+properly; without them, return `NOT_ASSESSABLE`. BEI returns `NOT_ASSESSABLE` until a baseline
+exists (§14.2) rather than reporting 1.000 as it does today. Requires `NOT_ASSESSABLE` to become a
+first-class status in `get_dcma_14_point_summary`, alongside the `n/a` concept `health_score.py`
+already has.
+
+**Increment 4 — threshold reconciliation (§14.4).** See the defect in §17.3. Move the scorecard to
+the DCMA defaults so it agrees with the scorer, and replace the non-standard "SS/FF ≤ 10%" check
+with the real DCMA 4, Relationship Types FS ≥ 90%.
+
+**Increment 5 — XER ingest (§6.1).** Largest single unlock: supplies data date, scheduled finish,
+per-activity calendars and resource assignments in one step, and is the precondition for §7.4 and
+for DCMA 10 being assessable at all.
+
+**Increment 6 — calendars (§7.4).** Per-activity calendars from XER, declared fallback for CSV,
+basis printed in the report. Makes the 44-day thresholds correct rather than approximately correct.
+
+**Increment 7 — report methodology and limitations appendices (§10.6, §10.7).** The defensibility
+payload. Cheap once the preceding increments supply the metadata to print.
+
+**Increment 8 — evidence capping (§5.4).** Not yet implemented; full populations are still embedded
+in the metrics dict at ~1 MB per analysis.
+
+**Increment 9 — baseline ingest and Class B checks (§14.2).** Gated on the export-procedure change,
+which is an organisational dependency — start that conversation early.
+
+Deferred: Parquet/content-addressed storage (§5.2), Postgres migration (§5.1), CPM engine (§14.3).
+
+### 17.3 Defect found while reviewing status
+
+**The scorecard and the health score disagree on hard constraints.**
+`health_score.py` scores DCMA 5 against a 5% target — the DCMA default, already correct — while
+`get_dcma_14_point_summary` reports and evaluates it against `'≤10%'`. A schedule with 7% hard
+constraints is therefore shown as **PASS** on the 14-point scorecard while simultaneously being
+penalised by the health score that sits beside it on the same page.
+
+This is a live inconsistency in the current release, not a rebuild concern, and should be fixed in
+Increment 4 or sooner. Note the fix makes the scorecard stricter, so schedules previously shown as
+passing this check may begin to fail it (§14.4).
