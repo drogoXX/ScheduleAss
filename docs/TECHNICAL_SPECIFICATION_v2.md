@@ -1,0 +1,717 @@
+# Schedule Assessment Platform — Technical Specification v2.0
+
+**Status:** Approved for build — all open decisions resolved (§14)
+**Date:** 17 August 2026
+**Supersedes:** `Schedule_Quality_Analyzer_PRD.md`
+**Target repository:** `github.com/drogoXX/ScheduleAss` (clean rewrite, history retained)
+
+---
+
+## 1. Purpose
+
+This specification defines a ground-up rebuild of the schedule assessment application. The
+existing codebase works and encodes real domain knowledge, but its architecture has degraded
+to the point where correctness can no longer be demonstrated: the "database" is a dictionary
+in browser session memory, analysis results embed megabytes of duplicated activity data, and
+several DCMA checks silently substitute fabricated inputs when real ones are absent.
+
+The rebuild has one governing objective: **every number the application prints must be
+traceable to a documented rule, a declared denominator, and the specific activities that
+produced it.** An assessment that cannot be defended in a schedule review meeting has no value,
+regardless of how fast it renders.
+
+Scope is deliberately narrowed to the **DCMA 14-Point Assessment** only. GAO framework content,
+the parallel "comprehensive float" analysis, and the ad-hoc health scoring are removed.
+
+---
+
+## 2. What we keep
+
+The current application solved a number of genuinely hard problems. These are requirements of
+the new system, not optional carry-over. Each was learned from real P6 exports and re-deriving
+them would be expensive.
+
+### 2.1 P6 column normalisation
+
+P6 exports append unit suffixes to column headers — `Total Float(d)`, `At Completion Duration(d)`,
+`(*)Free Float(d)`. Header matching must normalise these before comparison, case-insensitively,
+covering `(d) (h) (w) (m) (y) (%)` and the long forms `(days) (hours) (weeks) (months) (years)`.
+
+**Extension required.** The current implementation matches the WBS column on the exact string
+`WBS Code`. The export at `Schedule extract/P6_Extract.csv` names it `WBS`, so every WBS-dependent
+feature silently degrades to "not available" for that export format. The new ingester must resolve
+columns through a **declared alias table**, not exact strings, and must **fail loudly** when a
+column backing an enabled check cannot be resolved.
+
+### 2.2 Relationship parsing with type and lag
+
+`Predecessor Details` / `Successor Details` carry full relationship notation
+(`A21740: FF 10, A21750: FS, A21760: FS -5`). The bare `Predecessors` / `Successors` columns carry
+activity IDs only. The current parser correctly prefers the Details columns, falls back to the bare
+columns with an explicit warning, and defaults the fallback to `FS` with zero lag.
+
+This behaviour is **retained exactly**, with one hardening: when only bare columns are available,
+DCMA checks 2, 3 and 4 (Leads, Lags, Relationship Types) must report **Not Assessable** rather
+than computing against fabricated `FS`/`0` defaults. Defaulting and then scoring is the single
+most dangerous pattern in the current code.
+
+### 2.3 Domain exclusion rules
+
+Hard-won and correct. These were fixed in commits `02f288f` and `02edcbb` and must be preserved:
+
+- **Milestones are excluded from duration tests.** A milestone has zero duration by nature;
+  including it in a duration distribution corrupts the denominator. Detected via `Activity Type`
+  containing "Milestone", case-insensitive.
+- **Completed activities are excluded from float and duration tests.** DCMA tests forward-looking
+  schedule quality. A completed activity's float is not actionable.
+- **Missing-logic counts must be decomposed.** Reporting a single "missing logic" number invites
+  exactly the reconciliation disputes that commit `02edcbb` fixed. The breakdown —
+  *missing predecessor only*, *missing successor only*, *missing both*, *total unique* — is
+  mandatory, and the report must state that activities missing both are counted once in the
+  unique total and in each category total.
+- **Constraint categorisation.** Three-way split — Hard (`Must Start On`, `Must Finish On`,
+  `Start On`, `Finish On`, `Mandatory Start`, `Mandatory Finish`), Flexible (`Start On or After`
+  and the other three boundary forms), Schedule-Driven (`As Late As Possible`, `As Soon As
+  Possible`) — is more useful than a hard/soft binary and is retained.
+
+### 2.4 WBS hierarchy decomposition
+
+Splitting the WBS code into level columns and rolling metrics up by level is genuinely valuable
+for EPC schedules and is retained. It becomes a **reporting dimension**, not a separate analysis
+module: any DCMA check can be sliced by WBS level.
+
+### 2.5 Performance characteristics already achieved
+
+The optimisation work committed in `f79d5a6` established measured baselines the rebuild must
+match or beat. On a 6,345-activity export: full pipeline 0.76 s, dashboard interaction 0.37 s.
+The lesson encoded there — **never iterate a DataFrame row-wise when a columnar operation exists** —
+is a standing rule, not a one-off fix.
+
+---
+
+## 3. What we remove, and why
+
+| Removed | Reason |
+|---|---|
+| `session_state` as database | Data is per-browser-session, lost on refresh, invisible to other users, and unbounded (3.77 MB/upload, never evicted). It is not a database. |
+| Hardcoded credentials | `admin/admin123` and `viewer/viewer123` are committed in plaintext in `db_manager.py`. |
+| GAO framework content | Out of scope per this specification. Partial implementation of a second framework is worse than none. |
+| Ad-hoc health score | Indefensible. See §8. |
+| `comprehensive_float` module | Duplicates DCMA 6 and 7 with different thresholds and no stated basis. |
+| Excel report generator | Superseded by DOCX. Removes 556 lines and a 2.6 s generation path. Activity-level data export remains available as CSV. |
+| 15 root-level `test_*.py` scripts | Ad-hoc scripts, not a suite. Two are broken (`test_parser.py` hardcodes `/home/user/...`; `test_missing_logic_breakdown.py` calls a constructor kwarg that does not exist). Replaced by a real `tests/` tree. |
+| `instance/schedule_analyzer.db` | 8.5 MB, referenced by zero Python files. |
+| `archive/`, `debug_data_flow.py`, `verify_csv.py`, `.coverage` | Development detritus. |
+
+---
+
+## 4. Architecture
+
+Four layers, strictly ordered. **A layer may only import from layers above it.** This is enforced
+by an import-linter rule in CI, not by convention.
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  core/          Pure Python. No Streamlit, no DB, no I/O.    │
+│                 Ingestion, normalisation, DCMA rules, scoring.│
+│                 Deterministic: same input -> same output.     │
+├──────────────────────────────────────────────────────────────┤
+│  persistence/   SQLAlchemy models, repositories, migrations.  │
+│                 Depends on core types only.                   │
+├──────────────────────────────────────────────────────────────┤
+│  reporting/     DOCX generation. Consumes core result objects.│
+├──────────────────────────────────────────────────────────────┤
+│  ui/            Streamlit pages. Thin. No business logic.     │
+└──────────────────────────────────────────────────────────────┘
+```
+
+The critical constraint is that **`core/` must be runnable without Streamlit**. This is what makes
+the rules unit-testable, lets the assessment run in CI against reference schedules, and permits a
+future CLI or API without rework. The current codebase cannot do this — `db_manager.py` imports
+Streamlit to define what it calls a database.
+
+```
+src/
+├─ core/
+│  ├─ ingest/        readers (csv, xlsx, xer), column alias resolution, validation
+│  ├─ model/         Schedule, Activity, Relationship, DataDate, Baseline (typed)
+│  ├─ rules/         one module per DCMA check, uniform interface
+│  ├─ scoring/       compliance roll-up (§8)
+│  └─ ruleset.py     versioned thresholds + config
+├─ persistence/
+├─ reporting/docx/
+└─ ui/
+```
+
+### 4.1 Uniform rule interface
+
+Every DCMA check implements the same contract. This is what makes the assessment auditable and
+the report generator generic.
+
+```python
+@dataclass(frozen=True)
+class CheckResult:
+    check_id: str                 # "DCMA-06"
+    name: str                     # "High Float"
+    status: Status                # PASS | FAIL | NOT_ASSESSABLE
+    value: float | int | None     # measured result
+    threshold: str                # "<= 5%"  (rendered from ruleset)
+    denominator_label: str        # "incomplete, non-milestone activities"
+    denominator_count: int
+    numerator_count: int
+    evidence: list[ActivityRef]   # capped; see §5.4
+    evidence_truncated_at: int | None
+    not_assessable_reason: str | None
+    ruleset_version: str
+
+class Check(Protocol):
+    check_id: str
+    required_fields: frozenset[str]      # drives NOT_ASSESSABLE automatically
+    def evaluate(self, s: Schedule, cfg: RuleSet) -> CheckResult: ...
+```
+
+`required_fields` is the mechanism that eliminates silent degradation: the runner inspects the
+normalised schedule, and any check whose required fields are absent returns `NOT_ASSESSABLE` with
+a specific reason **before** its logic runs. No check can accidentally score against a default.
+
+---
+
+## 5. Data model and persistence
+
+### 5.1 Database choice
+
+**PostgreSQL 15+** for the shared-server deployment; SQLite for local development. Access through
+SQLAlchemy 2.x so both are supported by one codebase.
+
+Rationale: the deployment is a small team on a shared server, which means concurrent writes from
+independent Streamlit sessions. SQLite in WAL mode tolerates concurrent readers but serialises
+writers and will surface `database is locked` under simultaneous uploads. Postgres removes that
+failure mode and gives real types (`jsonb`, `timestamptz`, arrays) that the metric store benefits
+from. The abstraction cost is near zero if it is paid at the start.
+
+### 5.2 Separating bulk data from metadata
+
+The central storage mistake in the current design is treating one Python dict as both the record
+and the payload. The rebuild splits them:
+
+- **Relational tables** hold metadata, check results, and everything queried or aggregated.
+- **Activity rows are never stored in the relational schema.** The normalised activity table is
+  persisted once as a **Parquet blob**, addressed by the SHA-256 of the source upload. Parquet is
+  columnar and typed, so loading only the columns a given view needs costs a fraction of rehydrating
+  a JSON list of dicts.
+- **Session state holds identifiers only** — `schedule_id`, `analysis_id`, filter selections.
+  Never a DataFrame, never an activity list. This is the fix for the 3.77 MB-per-upload leak.
+
+### 5.3 Schema
+
+```sql
+project(id, code UNIQUE, name, description, created_by, created_at)
+
+upload(id, project_id, sha256 UNIQUE, filename, source_format,   -- xer | csv | xlsx
+       size_bytes,
+       storage_uri,              -- original file, retained indefinitely (§14.5)
+       parquet_uri,              -- normalised activities
+       data_date,                -- REQUIRED, see §7.1
+       finish_date, finish_date_field,   -- which P6 field was used, printed in report
+       calendar_basis,           -- 'xer_per_activity' | 'declared_default'
+       declared_calendar,        -- e.g. '5x8h', when basis is declared_default
+       is_baseline BOOL,
+       uploaded_by, uploaded_at)
+
+calendar(id, upload_id, p6_clndr_id, name, hours_per_day,
+         workweek jsonb, exceptions jsonb)     -- from XER CALENDAR
+
+baseline(id, project_id, upload_id,            -- upload_id -> a baseline XER
+         label, is_current, created_at, created_by)
+
+analysis(id, upload_id, baseline_id NULL, ruleset_version, ruleset_profile,
+         engine_version, compliance_passed, compliance_applicable,
+         quality_index NULL, checks_passed, checks_failed,
+         checks_not_assessable, created_at)
+
+check_result(id, analysis_id, check_id, status, value,
+             numerator, denominator, threshold_text,
+             not_assessable_reason)          -- one row per check
+
+check_evidence(id, check_result_id, activity_id, activity_name,
+               detail jsonb)                 -- capped per §5.4
+
+attestation(id, analysis_id, check_id,          -- DCMA-12, see §14.3
+            outcome,                            -- PASS | FAIL
+            delay_days_applied, activity_tested,
+            observed_finish_shift_days, notes,
+            attested_by, attested_at)
+
+audit_event(id, actor_id, action, entity_type, entity_id,
+            detail jsonb, occurred_at)
+```
+
+`check_result` as **one row per check** rather than a JSON blob is what makes version-over-version
+trending a SQL `GROUP BY` instead of a Python loop over nested dictionaries. Comparison — currently
+a whole page of bespoke code — becomes a query.
+
+### 5.4 Evidence capping
+
+Evidence lists are capped at **200 activities per check**, with `evidence_truncated_at` recording
+the true count. The current system stores every affected activity inside the metrics dict — 3,764
+entries for one check, 1.02 MB per analysis — while the UI renders at most 20 and the report at
+most a page. Full populations remain reachable via CSV export, which streams from Parquet.
+
+### 5.5 Content-addressed caching
+
+`upload.sha256` doubles as the analysis cache key. Re-uploading a byte-identical file with the same
+`ruleset_version` returns the stored analysis instead of recomputing. This also gives free
+deduplication and makes results reproducible by construction.
+
+---
+
+## 6. Ingestion
+
+### 6.1 Supported inputs
+
+**XER is the primary format and a Phase 1 requirement.** This is a change from the initial draft,
+driven by inspection of the actual project exports (§6.2): the CSV and XLSX exports omit every
+piece of metadata the assessment depends on, while the XER carries all of it natively.
+
+| Format | Priority | Carries |
+|---|---|---|
+| **P6 XER** | **Required, Phase 1** | Data date, scheduled/planned finish, per-activity calendars, typed relationships, resource assignments, WBS tree, scheduling options. Full assessment possible. |
+| P6 CSV export | Required, Phase 1 | Activities, float, typed relationships via Details columns. **No** data date, calendars, resources or baseline. Degraded assessment; missing inputs prompted or reported `NOT_ASSESSABLE`. |
+| P6 XLSX export | Required, Phase 1 | As CSV. Note the two dialects below. |
+
+**Two distinct XLSX dialects exist in real use** and both must be supported by the alias table:
+a human-readable dialect (`Activity ID`, `Total Float`) and a raw P6 internal-field dialect
+(`task_code`, `total_float_hr_cnt`, `pred_details`, `cstr_type`). The raw dialect reports float and
+duration in **hours**, not days, and must be converted using the activity calendar's hours-per-day
+before any 44-day threshold is applied. Treating an hour count as a day count is a silent 8× error.
+
+### 6.2 What the real exports actually contain
+
+Measured across the exports in `Schedule extract/`, this is the evidence base for the decisions
+in §14:
+
+| Input | Data date | Calendars | Resources | Baseline | Relationships |
+|---|---|---|---|---|---|
+| `gore extract.xer` | ✅ `last_recalc_date` = 2026-01-31 | ✅ 7 calendars | ✅ 445 of 1,952 tasks (22.8%) | ❌ single project, no baseline | ✅ 7,736 typed |
+| `P6_Extract.csv` | ❌ | ❌ | ❌ no resource column | ❌ | ✅ Details columns |
+| `Schedule export.csv` | ❌ | ❌ | ❌ | ❌ | ✅ Details columns |
+| `*.xlsx` (raw dialect) | ❌ | ❌ | ❌ | ⚠️ `var_start_date` / `var_end_date` variance fields only | ✅ `pred_details` |
+
+Two consequences worth stating plainly. **DCMA 10 (Resources) is not assessable from any CSV
+export** — no resource or cost column exists in any of them. And the XLSX variance fields imply a
+baseline exists inside P6 but is not being exported, which is what §14.2 resolves.
+
+### 6.3 Required metadata
+
+The current parser captures none of this, which is the root cause of the defensibility problems
+in §7.1. Each is read from the XER where present, and otherwise **prompted for explicitly at
+upload**. None may ever be inferred.
+
+1. **Data date (status date).** Mandatory; upload is rejected without it. From XER
+   `PROJECT.last_recalc_date`.
+2. **Project must-finish / contract finish date.** Required for CPLI (DCMA 13). From XER
+   `PROJECT.scd_end_date` or `plan_end_date`; note these differ (2028-04-30 vs 2028-12-22 in the
+   reference project), so **which field was used must be recorded and printed**.
+3. **Calendars.** Per §7.4.
+4. **Baseline.** A separate baseline XER, ingested as a first-class object (§14.2).
+
+### 6.4 Normalisation pipeline
+
+Ordered, each step pure and independently testable:
+
+1. Read → raw frame
+2. Resolve columns via alias table → fail loudly on unresolvable required columns
+3. Coerce dtypes — dates with an **explicit format list** (never bare `to_datetime`, which
+   currently falls back to per-element `dateutil` parsing and costs ~150 ms), numerics with
+   `errors="coerce"` and a recorded coercion-failure count
+4. Parse relationships → typed `Relationship` records
+5. Derive flags — `is_milestone`, `is_complete`, `has_predecessor`, `has_successor`,
+   `constraint_category`
+6. Decompose WBS → level columns
+7. Validate → `IngestReport` with errors, warnings, and per-column coercion statistics
+
+The `IngestReport` is persisted and surfaced in both the UI and the DOCX methodology appendix.
+A schedule where 12% of `Total Float` values failed numeric coercion produces a materially
+different assessment, and the reader must be told.
+
+---
+
+## 7. DCMA 14-Point specification
+
+### 7.1 Defensibility: the three structural failures being corrected
+
+**Failure 1 — the fabricated data date.** `dcma_analyzer.py:1099` reads
+`schedule_data.get('data_date')`, which the parser never populates, and silently falls back to
+`self.df['Start'].min()` — the earliest start date in the schedule. DCMA 9 tests forecast dates
+before the data date and actual dates after it. Anchored to the earliest start, that test is not
+merely inaccurate; it is structurally incapable of detecting the condition it names. **The data
+date is now mandatory input.**
+
+**Failure 2 — no baseline.** BEI compares work completed against work baselined. With no baseline
+ingested, the current BEI is not a baseline execution index. It must be `NOT_ASSESSABLE` until a
+baseline exists.
+
+**Failure 3 — approximation presented as measurement.** `_calculate_cpli()` carries the comment
+*"Simplified CPLI calculation. In a full implementation, this would identify the actual critical
+path"* — and its output is then printed as "CPLI" beside a DCMA target. Either compute it from
+declared inputs or report `NOT_ASSESSABLE`. An approximation labelled as the real metric is the
+most damaging thing a compliance tool can do.
+
+### 7.2 Assessability classes
+
+Honest classification of what a static export can support:
+
+- **Class A — computable from a single export** (checks 1–10 and 13), given the data date, and for
+  checks 6, 8 and 13 a resolved calendar basis (§7.4)
+- **Class B — requires an ingested baseline** (checks 11, 14) — resolved by §14.2
+- **Class C — requires CPM recalculation** (check 12) — resolved by §14.3
+
+Class C deserves emphasis. The **Critical Path Test** injects a large delay (conventionally 600
+days) into a remaining activity and verifies the project finish moves accordingly, proving the
+network is logically sound. This requires a scheduling engine to recalculate the network — it
+cannot be derived from a static export by any means. The specification therefore treats DCMA 12
+as **manual attestation**: the UI provides a structured input where an analyst records the test
+outcome, date performed, and who performed it; the report prints it as attested, with attribution,
+never as computed. Silently omitting it or fabricating a result are both unacceptable.
+
+### 7.3 The checks
+
+Thresholds are DCMA published defaults. All are configurable in `ruleset.py`; any deviation from
+default is stamped into the analysis and **printed in the report's methodology appendix**.
+
+| # | Check | Threshold | Denominator | Class | Notes |
+|---|---|---|---|---|---|
+| 1 | Logic | ≤ 5% | Incomplete activities | A | Missing predecessor and/or successor. Reported with the four-way breakdown of §2.3. |
+| 2 | Leads (negative lag) | 0 | All relationships | A | `NOT_ASSESSABLE` without Details columns. |
+| 3 | Lags | ≤ 5% | All relationships | A | `NOT_ASSESSABLE` without Details columns. |
+| 4 | Relationship Types | FS ≥ 90% | All relationships | A | Replaces the current non-standard "SS/FF ≤10%" check. |
+| 5 | Hard Constraints | ≤ 5% | Incomplete activities | A | Current code uses 10%. Corrected to the DCMA default. |
+| 6 | High Float | ≤ 5% | Incomplete, non-milestone | A | TF > 44 **working** days; calendar basis per §7.4. Exclusions per §2.3. |
+| 7 | Negative Float | 0 | Incomplete activities | A | TF < 0. |
+| 8 | High Duration | ≤ 5% | Incomplete, non-milestone | A | Remaining duration > 44 **working** days; calendar basis per §7.4. |
+| 9 | Invalid Dates | 0 | All activities | A | No forecast dates before data date; no actual dates after it. **Requires data date.** |
+| 10 | Resources | 100% | Incomplete, duration > 0 | A | **XER only in practice** — no CSV/XLSX export carries resource data (§6.2), so `NOT_ASSESSABLE` on those paths. |
+| 11 | Missed Tasks | ≤ 5% | Baseline tasks due by data date | B | Requires baseline. |
+| 12 | Critical Path Test | Pass | — | C | Manual attestation. See §7.2. |
+| 13 | CPLI | ≥ 0.95 | — | A* | `(critical path length + total float) / critical path length`, where length runs from data date to project finish. Requires data date **and** must-finish date. |
+| 14 | BEI | ≥ 0.95 | Baseline tasks due by data date | B | Requires baseline. |
+
+### 7.4 Calendar and working-day basis
+
+The 44-day thresholds in checks 6 and 8, and the critical path length in check 13, are all
+expressed in **working days**. Comparing a calendar-day duration against a working-day threshold is
+a silent 5/7ths error, and the reference project shows this is not hypothetical: its activities are
+spread across **seven calendars**, including 5-day, 6-day and 7-day workweeks.
+
+Resolution order, per activity:
+
+1. **XER ingested** — use the activity's assigned calendar (`TASK.clndr_id` → `CALENDAR`), including
+   its hours-per-day and holiday exceptions. Exact.
+2. **CSV/XLSX ingested** — apply a **declared project-default calendar**, selected by the analyst at
+   upload and defaulting to 5×8h. The assumption is recorded on the analysis and **printed in the
+   report's methodology appendix**.
+
+The report always states which basis was used. Where the fallback applied, it says so, because the
+resulting figures carry a known and quantifiable error.
+
+For the reference project the fallback error is small but real: 98.2% of activities sit on 5-day
+calendars (82.0% `GORe_5x8h_SH`, 8.4% Implenia, 7.8% Standard 5-Day), while 1.7% sit on 6-day or
+7-day calendars and would be misclassified by a flat 5-day assumption. Small enough to be usable;
+large enough that it must be disclosed rather than hidden.
+
+Hour-denominated fields in the raw XLSX dialect (`total_float_hr_cnt`, `total_drtn_hr_cnt`) are
+converted to days using the resolved calendar's hours-per-day, never a hardcoded 8.
+
+---
+
+## 8. Schedule health assessment
+
+### 8.1 Why the current score is withdrawn
+
+`_calculate_health_score()` starts at 100 and applies deductions that cannot be defended:
+
+- `-10 points per negative lag, capped at -30` — an absolute count, unnormalised. A 500-activity
+  schedule with 3 leads and a 6,000-activity schedule with 300 leads receive the identical penalty.
+- `-5 points per missing-logic activity, capped at -25` — saturates at five activities. Every
+  schedule beyond trivial size takes the full deduction, so the term carries no information.
+- `+5 bonus for good CPLI` — a score that can exceed its own deduction baseline is not a scale.
+- Count-based and percentage-based terms are mixed with no stated rationale, and the weights
+  appear nowhere in any document.
+
+No analyst can defend this in a schedule review, because there is nothing to defend — the numbers
+have no derivation.
+
+### 8.2 The replacement
+
+**Primary metric — DCMA Compliance.** The headline figure is a fraction, not a score:
+
+> **DCMA Compliance: 9 of 12 applicable checks passed** (2 failed, 1 not assessable, 2 excluded)
+
+This is the industry-standard way the assessment is reported, requires no invented weighting,
+and is directly auditable. Checks that are `NOT_ASSESSABLE` are **removed from the denominator**
+and listed explicitly — never counted as passes.
+
+**Secondary metric — Weighted Quality Index (0–100), optional and clearly subordinate.** Where a
+single trendable number is needed, it is computed under published rules:
+
+1. Each check yields a normalised sub-score in `[0, 1]`. Percentage checks use a declared linear
+   ramp from threshold to a declared failure bound (e.g. DCMA 6: 0% → 1.0, 5% → 1.0, 20% → 0.0).
+   Binary checks yield 0 or 1.
+2. Sub-scores combine as a **weighted mean over assessable checks only**. Weights are declared in
+   `ruleset.py`, printed in the report appendix, and sum to 1.0 across the full set.
+3. Size-independent by construction — every input is a ratio, never a raw count.
+4. Bounded `[0, 100]`. No bonuses.
+5. The report prints the full arithmetic: each check's raw value, sub-score, weight, contribution.
+
+Rules governing both metrics:
+
+- **`NOT_ASSESSABLE` is never silently a pass.** It is a distinct, visible state everywhere.
+- **Every metric declares its denominator** in the UI and the report.
+- **Every result links to its evidence** — the activities that drove it.
+- **Deterministic and versioned.** `ruleset_version` and `engine_version` stamp every analysis and
+  every report. A report from six months ago can be reproduced exactly.
+- **Bands are labels, not conclusions.** If banding is shown, the numeric value and the
+  pass/fail fraction appear alongside it.
+
+---
+
+## 9. User interface
+
+Streamlit is retained. The problems in the current UI are misuse, not framework limits.
+
+### 9.1 Rerun discipline
+
+The governing fact: **`st.tabs` renders every tab body on every rerun.** Seven tabs of charts
+currently execute on each keystroke in a search box.
+
+- Wrap each tab body in **`@st.fragment`** so a widget interaction reruns only its own fragment.
+  This is now justified by measurement: after the pandas work in `f79d5a6`, the residual ~0.37 s
+  interaction cost is dominated by Plotly figure construction and Streamlit serialisation, which
+  fragments are the correct tool for.
+- **`@st.cache_data`** on the analysis pipeline, keyed on `(sha256, ruleset_version)` — both
+  hashable scalars. Never pass a DataFrame or dict as a cache key. `max_entries=8`, no TTL:
+  inputs are immutable and content-addressed, so entries can never go stale.
+- **`@st.cache_resource`** for the SQLAlchemy engine only. It is shared across all user sessions,
+  so it must hold no per-user state — the failure the current `DatabaseManager` invites.
+- Derived frames are computed once per run and passed down, never rebuilt per tab.
+
+### 9.2 Data display
+
+- **Server-side pagination.** Activity tables render 100 rows per page from Parquet, with filtering
+  and sorting pushed into the query. A 6,345-row `st.dataframe` is never constructed.
+- **No eager `to_csv`.** Exports generate inside a callback on click, not on every rerun.
+- Charts are capped at a declared number of series, with the cap stated when it binds.
+
+### 9.3 Pages
+
+| Page | Purpose |
+|---|---|
+| Upload | File, project, **data date (mandatory)**, must-finish date, optional baseline. Shows `IngestReport` before analysis is offered. |
+| Assessment | DCMA scorecard: 14 rows, status, value, threshold, denominator. Drill-down to evidence. |
+| Detail | Per-check evidence with WBS slicing. |
+| Trend | Version-over-version comparison, driven by SQL over `check_result`. |
+| Report | DOCX generation and download. |
+| Admin | Users, projects, ruleset configuration, audit log. |
+
+### 9.4 Authentication
+
+Real authentication replaces the hardcoded dictionary: `bcrypt`/`argon2` password hashing, users in
+Postgres, roles (Admin / Analyst / Viewer), project-scoped access, and every mutation written to
+`audit_event`. No credentials in source, ever.
+
+---
+
+## 10. DOCX reporting
+
+`python-docx`. The current generator's structure is sound and its section layout is largely
+retained; what changes is that the document must now be **self-justifying**.
+
+Mandatory sections:
+
+1. **Cover** — project, schedule version, data date, baseline identity, ruleset version,
+   generation timestamp, author.
+2. **Executive summary** — compliance fraction, the failed checks in severity order, and the
+   assessment's stated limitations.
+3. **DCMA scorecard** — one table, 14 rows: check, status, measured value, threshold, denominator.
+4. **Per-check detail** — for each failure: what the check tests, what was measured, why it matters,
+   the recommended corrective action, and a capped evidence table of driving activities.
+5. **WBS breakdown** — compliance by WBS level 1 and 2.
+6. **Methodology appendix — mandatory, non-optional.** Every threshold with its configured value;
+   any deviation from DCMA defaults flagged explicitly; all exclusion rules; all denominators; the
+   **calendar basis** (per-activity from XER, or the declared default, per §7.4); **which P6 finish
+   field fed CPLI** (§6.3); the source format and file SHA-256; the ingest report including
+   per-column coercion failures; the baseline identity where one was used; the data retention
+   statement (§14.5); and the ruleset and engine versions.
+7. **Limitations** — every `NOT_ASSESSABLE` check with its specific reason, and DCMA 12's
+   attestation status with attributed name and date, flagged if stale relative to the data date.
+
+Sections 6 and 7 are what make the document defensible in a review. A report that prints results
+without printing the rules that produced them cannot be audited, and this is precisely the gap in
+the current output.
+
+Formatting: numbered headings, TOC field, header/footer with page numbering, landscape orientation
+for wide tables, status conveyed by both colour **and** text so it survives monochrome printing.
+
+---
+
+## 11. Testing and validation
+
+The current repository has an empty `tests/` directory and 15 ad-hoc scripts at root, two of which
+are broken. Replaced by:
+
+| Layer | Requirement |
+|---|---|
+| Rule unit tests | Every check: pass case, fail case, boundary at threshold, and **missing-input case asserting `NOT_ASSESSABLE`**. The last is non-negotiable — it is the regression guard for the silent-default class of bug. |
+| Golden-file tests | Reference schedules with hand-verified expected results, committed. Any change to a computed value must be an explicit, reviewed golden-file update. |
+| Property tests | Invariants via Hypothesis: percentages in `[0,100]`; numerator ≤ denominator; compliance fraction denominators equal to assessable-check count. |
+| Ingest tests | Every supported export dialect, including the `WBS` vs `WBS Code` divergence that currently causes silent degradation. |
+| UI smoke tests | `streamlit.testing.v1.AppTest` — every page renders, survives a widget rerun, and keeps session state isolated across two sessions. This harness is already proven and should be carried over directly. |
+| Performance regression | Asserts the budgets in §12 on a 6,345-activity fixture. |
+
+CI gates: `ruff`, `mypy --strict` on `core/`, import-linter for the layer rule, pytest with
+coverage ≥ 85% on `core/`.
+
+---
+
+## 12. Non-functional requirements
+
+Budgets are set against the measured post-optimisation baseline, on the 6,345-activity reference
+export. The rebuild may not regress against work already banked.
+
+| Metric | Budget | Current measured |
+|---|---|---|
+| Ingest + normalise | ≤ 0.5 s | 0.27 s |
+| Full DCMA assessment | ≤ 0.6 s | 0.46 s |
+| Page interaction (p95) | ≤ 0.2 s | 0.37 s (fragments required) |
+| DOCX generation | ≤ 2.0 s | 0.10 s |
+| Session state per user | ≤ 1 MB | 3.77 MB per upload, unbounded |
+| Scaling | Linear to 50,000 activities | Linear at ~0.07 ms/activity |
+
+Concurrency: 10 simultaneous users without lock contention or cross-session leakage.
+
+---
+
+## 13. Repository reset
+
+Clean rewrite on a branch, history retained, same remote.
+
+1. Branch `rebuild/v2` from `main`.
+2. Delete the application tree. Preserve `CHANGELOG.md`, `README.md`, this specification, and
+   `docs/`.
+3. Add `.gitignore` entries for `*.db`, `.coverage`, `input/`, `Schedule extract/`, `instance/`.
+   **Note:** the working tree currently contains untracked client schedule data and PDFs under
+   `input/` and `Schedule extract/`. These must be confirmed safe to retain locally and must never
+   be committed. Test fixtures are anonymised and committed separately under `tests/fixtures/`.
+4. Build to this specification in the layer order of §4 — `core/` first, with tests, before any
+   Streamlit code is written.
+5. Validate the new engine against the old on the four reference exports. Every divergence must be
+   explained and recorded as either a corrected defect or an intentional change. Expected
+   divergences: DCMA 5 threshold 10% → 5%; DCMA 4 replaced by Relationship Types; DCMA 9 corrected
+   by a real data date; BEI and Missed Tasks becoming `NOT_ASSESSABLE` without a baseline.
+6. Merge to `main`, tag `v2.0.0`.
+
+Phasing, revised for the §14 decisions:
+
+- **Phase 1** — `core/`: **XER + CSV + XLSX ingest** (both XLSX dialects), calendar resolution,
+  all Class A checks, compliance scoring, full test suite. No UI.
+- **Phase 2** — persistence (Postgres, migrations, retention controls per §14.5), authentication,
+  Streamlit UI.
+- **Phase 3** — DOCX reporting including the methodology and limitations appendices, and the
+  DCMA 12 attestation form.
+- **Phase 4** — baseline ingest, Class B checks (11, 14), trend analysis.
+- **Future** — CPM engine, retiring the §14.3 attestation and making CPLI exact.
+
+XER ingest is Phase 1, not Phase 4: §14.1 and §14.2 both depend on it, and without it no
+assessment is fully defendable.
+
+---
+
+## 14. Decisions taken
+
+All five open items were resolved on 17 August 2026 against the export evidence in §6.2. Recorded
+here because each has downstream consequences the build must honour.
+
+### 14.1 Calendars — XER calendars, declared fallback
+
+Per-activity calendars from the XER; a declared project-default calendar for CSV/XLSX, printed as
+an assumption. Specified in §7.4.
+
+**Consequence:** XER ingest moves from Phase 2 to Phase 1.
+
+### 14.2 Baseline — request a baseline XER export
+
+A separate baseline XER is ingested as a first-class object (`baseline` table, §5.3), making DCMA 11
+and 14 fully computable rather than approximated. The XLSX variance-field proxy was rejected: it is
+a derived approximation, which is the exact pattern §7.1 exists to eliminate.
+
+**Consequence:** a one-time change to the planning team's export procedure — baselines must be
+exported alongside the current schedule. Until a project supplies one, checks 11 and 14 report
+`NOT_ASSESSABLE` and leave the compliance denominator. **This is a dependency on people, not code,
+and is the single most likely thing to delay full 14-point coverage.** It should be agreed with the
+planning team before Phase 1 completes.
+
+### 14.3 DCMA 12 — manual attestation
+
+The analyst performs the 600-day critical path test in P6 and records the outcome through a
+structured form: activity tested, delay applied, observed finish shift, outcome, notes, who and
+when. Persisted to `attestation` (§5.3). The report prints it as **attested, with attribution and
+date** — never as computed.
+
+A CPM engine was considered and deferred. It remains the eventual correct answer, since it would
+also make CPLI exact rather than input-dependent and eliminate Class C entirely; the XER's 7,736
+typed relationships and full calendar set make it genuinely feasible. Recorded as a candidate for a
+future phase, not v2.0.
+
+**Consequence:** an attestation that is stale relative to the analysis must be shown as stale. The
+UI flags any attestation whose `attested_at` precedes the upload's `data_date`.
+
+### 14.4 Thresholds — DCMA published defaults
+
+The defaults in §7.3 govern. Two deliberate corrections to current behaviour:
+
+- **Hard constraints: 10% → 5%.** Schedules previously assessed as passing may now fail.
+- **"SS/FF ≤ 10%" is removed**, replaced by the actual DCMA 4, Relationship Types (FS ≥ 90%).
+
+Per-project overrides are permitted but are stamped into the analysis and printed in the
+methodology appendix. Defaults are locked; overriding is a visible act.
+
+**Consequence:** §13.5's old-vs-new validation must expect these divergences, and any client
+holding a prior report should be told the threshold changed rather than the schedule degrading.
+
+### 14.5 Retention — originals and results retained indefinitely
+
+Source files, normalised Parquet, and all analysis results are retained without expiry, so any
+historical report can be reproduced byte-for-byte from its source.
+
+This is the strongest position for auditability and the weakest for data minimisation. Since the
+stored corpus is client schedule data accumulating indefinitely on a shared server, the following
+controls are **requirements of this decision**, not optional hardening:
+
+- Encryption at rest for the file store and the database.
+- Object-store access scoped to the application service account only; never a world-readable path
+  on the shared server.
+- Project-scoped authorisation on every retrieval — a user may only fetch files belonging to
+  projects they can access (§9.4).
+- Every download of an original file written to `audit_event`.
+- A documented deletion path for a client exercising a contractual or regulatory erasure right,
+  even though no automatic expiry runs.
+- Retention stated in the client-facing report appendix, so the client knows their schedule is held.
+
+**Consequence:** storage grows without bound. Budget roughly 3–4 MB per upload (original plus
+Parquet) and review annually.
+
+---
+
+## 15. Remaining risks
+
+1. **Baseline export procedure (§14.2)** — organisational, not technical. Full 14-point coverage
+   depends on it. Agree it before Phase 1 closes.
+2. **Attestation discipline (§14.3)** — DCMA 12 is only as good as the analyst's rigour. Staleness
+   flagging mitigates but does not remove this.
+3. **Threshold change communication (§14.4)** — prior assessments used 10% for hard constraints.
+   Re-issuing a report against the same schedule may show a new failure.
+4. **DCMA 10 on CSV workflows (§6.2)** — no CSV export carries resource data, so resource coverage
+   is only assessable via XER. On the reference XER, only 22.8% of tasks carry assignments, which
+   will likely be a genuine failure rather than a data gap. Worth confirming with the planner that
+   resource loading is expected before reporting it as a finding.
+5. **Indefinite retention (§14.5)** — accepted deliberately; controls above are mandatory.
