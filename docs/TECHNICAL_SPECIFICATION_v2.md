@@ -1,7 +1,7 @@
 # Schedule Assessment Platform — Technical Specification v2.0
 
-**Status:** Approved for build — all open decisions resolved (§14)
-**Date:** 17 August 2026
+**Status:** Revised — technical decisions resolved (§14); **delivery approach open (§16)**
+**Date:** 17 August 2026 (revised same day against `main` @ `8a1d3de`)
 **Supersedes:** `Schedule_Quality_Analyzer_PRD.md`
 **Target repository:** `github.com/drogoXX/ScheduleAss` (clean rewrite, history retained)
 
@@ -89,19 +89,53 @@ is a standing rule, not a one-off fix.
 
 ---
 
-## 3. What we remove, and why
+## 3. Current state of `main`
 
-| Removed | Reason |
+> **Revised 17 August 2026.** The first draft of this section was written against the
+> `restore/nov-2025` line. While the performance work was in progress, `main` absorbed the
+> production-readiness effort (PRs #28–30, 71 files, +8,764/−1,487), which independently fixed
+> four of the seven items originally listed for removal. This section now records what is
+> genuinely outstanding. **The scope of the rebuild is materially smaller than first drafted.**
+
+### 3.1 Already fixed on `main` — do not rebuild
+
+| Item | Resolution on `main` |
 |---|---|
-| `session_state` as database | Data is per-browser-session, lost on refresh, invisible to other users, and unbounded (3.77 MB/upload, never evicted). It is not a database. |
-| Hardcoded credentials | `admin/admin123` and `viewer/viewer123` are committed in plaintext in `db_manager.py`. |
-| GAO framework content | Out of scope per this specification. Partial implementation of a second framework is worse than none. |
-| Ad-hoc health score | Indefensible. See §8. |
-| `comprehensive_float` module | Duplicates DCMA 6 and 7 with different thresholds and no stated basis. |
-| Excel report generator | Superseded by DOCX. Removes 556 lines and a 2.6 s generation path. Activity-level data export remains available as CSV. |
-| 15 root-level `test_*.py` scripts | Ad-hoc scripts, not a suite. Two are broken (`test_parser.py` hardcodes `/home/user/...`; `test_missing_logic_breakdown.py` calls a constructor kwarg that does not exist). Replaced by a real `tests/` tree. |
-| `instance/schedule_analyzer.db` | 8.5 MB, referenced by zero Python files. |
-| `archive/`, `debug_data_flow.py`, `verify_csv.py`, `.coverage` | Development detritus. |
+| `session_state` as database | Replaced by a real SQLite backend with a declared schema, connection timeout and `check_same_thread=False`. |
+| Hardcoded credentials | Gone. `src/auth/security.py` implements PBKDF2-SHA256 with per-user salt, configurable iterations, and rehash-on-login. A sound implementation, not a stopgap. |
+| Ad-hoc root test scripts | Removed. Replaced by a 12-file `tests/` suite with `conftest.py`, `pytest.ini` and `requirements-dev.txt`, including `test_security.py` and `test_ui_safety.py`. **223 tests, all passing.** |
+| No design system | `src/ui/` added: `theme.py`, `palette.py`, `charts.py`, `diagnostics.py`. |
+| Row-wise pandas scans | Fixed in `f79d5a6`, merged to `main` in `8a1d3de`. `analyze()` 2.65 s → 0.45 s, output verified identical. |
+
+Carrying these forward is now a **migration** concern, not a rebuild one. In particular the auth
+implementation and the test suite should be moved across largely intact.
+
+### 3.2 Still outstanding — the actual case for this work
+
+| To remove or fix | Reason |
+|---|---|
+| **Fabricated data date** | `data_date` is never populated; falls back to `df['Start'].min()`. See §7.1. **The single strongest argument for this work.** |
+| **BEI without a baseline** | Not a baseline execution index. See §7.1. |
+| **CPLI approximation** | Self-documented as approximate, printed as the real metric. See §7.1. |
+| **Ad-hoc health score** | Indefensible; see §8. Note `main` added `tests/test_health_score.py`, which pins the current scheme — **read it before changing the scoring, as it encodes the existing behaviour as expected.** |
+| GAO framework content | Out of scope. A partial second framework is worse than none. |
+| `comprehensive_float` module | Duplicates DCMA 6 and 7 at different thresholds with no stated basis. |
+| Excel report generator | Superseded by DOCX (§10). Activity export remains available as CSV. |
+| No calendar handling | 44-day thresholds evaluated without calendars; see §7.4. |
+| No XER ingest | Every metadata gap above is closed by XER (§6.1). |
+| `archive/`, `instance/*.db`, `.coverage` | Development detritus, still tracked. |
+
+### 3.3 Consequence for the delivery strategy
+
+With the database, authentication, test suite and design system already sound, a full clean-slate
+rewrite would re-derive working code. The remaining defects are concentrated in **`core/`
+correctness** — ingestion metadata, calendars, the DCMA rule set, and scoring — not in the
+surrounding application.
+
+The layered architecture of §4 remains the right target, since `main` has no separation between
+analysis logic and Streamlit. But it is reachable by **extracting a pure `core/` package and
+migrating the existing UI onto it**, rather than by emptying the repository. The delivery decision
+between full rewrite and targeted refactor is recorded as open in §16.
 
 ---
 
@@ -180,14 +214,25 @@ a specific reason **before** its logic runs. No check can accidentally score aga
 
 ### 5.1 Database choice
 
-**PostgreSQL 15+** for the shared-server deployment; SQLite for local development. Access through
-SQLAlchemy 2.x so both are supported by one codebase.
+**Current state:** `main` already uses SQLite directly via `sqlite3`, with a declared schema,
+`timeout=30` and `check_same_thread=False`. This works and should not be discarded casually.
 
-Rationale: the deployment is a small team on a shared server, which means concurrent writes from
-independent Streamlit sessions. SQLite in WAL mode tolerates concurrent readers but serialises
-writers and will surface `database is locked` under simultaneous uploads. Postgres removes that
-failure mode and gives real types (`jsonb`, `timestamptz`, arrays) that the metric store benefits
-from. The abstraction cost is near zero if it is paid at the start.
+**Target: PostgreSQL 15+** for the shared-server deployment, SQLite for local development, accessed
+through SQLAlchemy 2.x so one codebase serves both.
+
+`main` already sets `PRAGMA journal_mode = WAL`, so concurrent readers are handled and the obvious
+interim mitigation is in place.
+
+Rationale for the eventual move: the deployment is a small team on a shared server, meaning
+concurrent writes from independent Streamlit sessions. Even under WAL, SQLite serialises writers,
+and `timeout=30` converts that contention into a 30-second stall rather than removing it — under
+simultaneous uploads users see the app hang, not error. Postgres removes the failure mode and
+provides `jsonb`, `timestamptz` and arrays the metric store uses directly.
+
+**This is a migration, not a prerequisite.** The schema in §5.3 can be delivered on SQLite first
+and moved to Postgres when concurrent-write pain is actually observed. Introducing SQLAlchemy at
+the point the schema is rewritten costs little; rewriting a working, WAL-enabled `sqlite3` layer
+purely to change engines, before the contention is real, is not justified.
 
 ### 5.2 Separating bulk data from metadata
 
@@ -556,8 +601,17 @@ for wide tables, status conveyed by both colour **and** text so it survives mono
 
 ## 11. Testing and validation
 
-The current repository has an empty `tests/` directory and 15 ad-hoc scripts at root, two of which
-are broken. Replaced by:
+**Revised.** `main` now carries a real 12-file pytest suite (223 tests, all passing) with
+`conftest.py`, `pytest.ini` and `requirements-dev.txt`. That suite is an asset to be **extended,
+not replaced**. Two cautions when doing so:
+
+- `tests/test_health_score.py` pins the current scoring scheme. Withdrawing it per §8 will require
+  deliberately rewriting those tests, and that change should be reviewed as a behaviour change, not
+  slipped through as a refactor.
+- `tests/test_parser.py` on `main` is a real suite, not the broken root script of the same name
+  that was removed.
+
+Additions required on top of the existing suite:
 
 | Layer | Requirement |
 |---|---|
@@ -591,24 +645,55 @@ Concurrency: 10 simultaneous users without lock contention or cross-session leak
 
 ---
 
-## 13. Repository reset
+## 13. Repository hygiene
 
-Clean rewrite on a branch, history retained, same remote.
+> **Revised.** The original plan here was to empty the application tree on a `rebuild/v2` branch.
+> That plan is **withdrawn** in light of §3.1: it would delete a working SQLite backend, a sound
+> PBKDF2 auth implementation, a 223-test suite and a design system. The hygiene actions below are
+> safe and should proceed regardless of the §16 delivery decision.
 
-1. Branch `rebuild/v2` from `main`.
-2. Delete the application tree. Preserve `CHANGELOG.md`, `README.md`, this specification, and
-   `docs/`.
-3. Add `.gitignore` entries for `*.db`, `.coverage`, `input/`, `Schedule extract/`, `instance/`.
-   **Note:** the working tree currently contains untracked client schedule data and PDFs under
-   `input/` and `Schedule extract/`. These must be confirmed safe to retain locally and must never
-   be committed. Test fixtures are anonymised and committed separately under `tests/fixtures/`.
-4. Build to this specification in the layer order of §4 — `core/` first, with tests, before any
-   Streamlit code is written.
-5. Validate the new engine against the old on the four reference exports. Every divergence must be
-   explained and recorded as either a corrected defect or an intentional change. Expected
-   divergences: DCMA 5 threshold 10% → 5%; DCMA 4 replaced by Relationship Types; DCMA 9 corrected
-   by a real data date; BEI and Missed Tasks becoming `NOT_ASSESSABLE` without a baseline.
-6. Merge to `main`, tag `v2.0.0`.
+### 13.1 Immediate, uncontroversial
+
+1. ✅ **Done.** Remove `archive/dev_scripts/` (18 tracked files) — the old ad-hoc scripts,
+   superseded by the `tests/` suite. Recoverable from history if ever needed.
+2. ✅ **Already done on `main`.** `.gitignore` covers `*.db`, `.coverage`, `instance/`, `input/`,
+   `Schedule extract/` and `*.xer`, with a deliberate `!data/sample_schedule.csv` exception.
+   Added by the production-readiness work.
+3. ✅ **Already correct.** The client schedule data and PDFs under `input/` and `Schedule extract/`
+   are untracked and ignored. They must remain local-only. Note `data/Schedule export.csv` is a
+   deliberate exception and is real client data — see §13.2.
+4. ✅ **Already done on `main`.** `PRAGMA journal_mode = WAL` is set in `db_manager.py`.
+
+Nothing else stale remains tracked: `instance/`, `.coverage` and `*.db` are all untracked already.
+
+### 13.2 Client data already in git history — open issue
+
+`data/Schedule export.csv` is a **real project schedule** — 1,261 activities, recognisable
+commissioning scope — and it is committed in git history, not merely present in the working tree.
+Removing it from tracking stops it propagating forward but does **not** remove it from history.
+
+Given §14.5 treats schedules as client data warranting encryption at rest and access auditing, a
+real client schedule sitting in a git history that any repository collaborator can `git log -p`
+is inconsistent with that stance.
+
+Options, in ascending cost:
+
+| Option | Effect | Cost |
+|---|---|---|
+| Leave as-is, document | No change. Exposure limited to repo collaborators. | Zero |
+| Untrack + gitignore | Stops forward propagation; history retains it. | Trivial |
+| `git-filter-repo` purge | Fully removes it from all commits. | Rewrites every SHA; breaks clones and PR references; everyone re-clones |
+
+**Deferred by decision on 17 August 2026** — flagged here, to be resolved separately. The repository
+is private, which bounds the exposure but does not eliminate it.
+
+### 13.3 Validation when the rule engine changes
+
+Any change to the DCMA rules must be validated against the four reference exports, with every
+divergence explained and recorded as either a corrected defect or an intentional change. Expected
+divergences: DCMA 5 threshold 10% → 5%; DCMA 4 replaced by Relationship Types; DCMA 9 corrected by
+a real data date; BEI and Missed Tasks becoming `NOT_ASSESSABLE` without a baseline. The
+old-vs-new deep-diff harness used for the performance work is the right tool and should be kept.
 
 Phasing, revised for the §14 decisions:
 
@@ -715,3 +800,42 @@ Parquet) and review annually.
    will likely be a genuine failure rather than a data gap. Worth confirming with the planner that
    resource loading is expected before reporting it as a finding.
 5. **Indefinite retention (§14.5)** — accepted deliberately; controls above are mandatory.
+6. **Client schedule in git history (§13.2)** — deferred, not resolved.
+7. **`main` moves under us.** This specification was invalidated in part within hours of drafting,
+   because `main` absorbed PRs #28–30 mid-flight. Re-verify §3 against `main` before acting on this
+   document.
+
+---
+
+## 16. Open decision: delivery approach
+
+§3.3 changes the economics of this work. The decision below is **not yet taken**.
+
+### Option A — targeted refactor on `main`
+
+Keep the SQLite backend, PBKDF2 auth, 223-test suite and `src/ui/` design system. Extract a pure
+`core/` package, move the DCMA rules into it behind the §4.1 uniform interface, add XER ingest and
+calendar handling, fix the data date, replace the scoring, and migrate the existing pages onto the
+new core.
+
+*For:* preserves working code and a passing suite; the app stays runnable throughout; delivers the
+defensibility fixes — which are the actual value — soonest.
+*Against:* the layered boundary must be carved out of existing code rather than built clean, and
+partially-migrated states are easy to leave half-finished.
+
+### Option B — clean rewrite per the original §13
+
+*For:* the §4 architecture is built correctly from the start with no legacy accommodation.
+*Against:* re-derives a working database layer, a sound auth implementation, and 223 tests. Leaves
+no runnable application until Phase 2 completes. Materially more expensive for the same
+defensibility outcome.
+
+### Recommendation
+
+**Option A.** Every defect in §7.1 — the fabricated data date, the absent baseline, the CPLI
+approximation — lives in `core/` logic, not in the surrounding application. None of them requires
+an empty repository to fix. The layered architecture is worth having, but it is a means to
+testable rules, and extraction achieves that at a fraction of the cost.
+
+If Option A is taken, §13's phasing still applies with Phase 2 reduced to *migration* rather than
+*construction*.
