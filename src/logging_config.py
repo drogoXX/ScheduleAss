@@ -10,7 +10,7 @@ import logging.handlers
 import sys
 import uuid
 
-from src.config import ensure_directories, settings
+from src.config import data_dir_warnings, ensure_directories, settings
 
 _CONFIGURED = False
 
@@ -45,6 +45,14 @@ def configure_logging() -> None:
     root.addHandler(stream_handler)
 
     _CONFIGURED = True
+
+    # State where runtime data is being written, then flag the locations known to
+    # break a live database. A sync client or network share corrupts SQLite and
+    # drops Streamlit sessions without ever raising a Python error, so this
+    # warning is often the only signal a user will get. See spec §5.6.
+    root.info("Runtime data directory: %s", settings.DATA_DIR)
+    for problem in data_dir_warnings():
+        root.warning("UNSAFE DATA DIRECTORY: %s", problem)
 
 
 def get_logger(name: str) -> logging.Logger:

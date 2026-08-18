@@ -137,6 +137,55 @@ class Settings:
 settings = Settings()
 
 
+# Folder names that indicate a file-synchronisation client owns the directory.
+# A sync client rewrites files the application holds open, which corrupts SQLite
+# and tears down Streamlit sessions mid-use - with nothing in the server log.
+_SYNC_TREE_MARKERS = ("onedrive", "dropbox", "google drive", "googledrive",
+                      "icloud", "creative cloud", "box sync", "nextcloud")
+
+
+def data_dir_warnings() -> list:
+    """Reasons the configured data directory is unsafe for a live database.
+
+    Returns an empty list when the location is fine. See
+    docs/TECHNICAL_SPECIFICATION_v2.md §5.6 - this check exists because a
+    OneDrive-hosted database caused repeated session loss that produced no
+    server-side error at all.
+    """
+    problems = []
+    resolved = str(settings.DATA_DIR.resolve())
+    lowered = resolved.lower()
+
+    for marker in _SYNC_TREE_MARKERS:
+        if marker in lowered:
+            problems.append(
+                f"The data directory is inside a '{marker}' synced folder ({resolved}). "
+                "A sync client modifying the database while the app has it open causes "
+                "corruption and dropped sessions. Set APP_DATA_DIR to a local path "
+                "outside the synced tree."
+            )
+            break
+
+    if resolved.startswith("\\\\") or resolved.startswith("//"):
+        problems.append(
+            f"The data directory is on a network share ({resolved}). SQLite locking is "
+            "unreliable over SMB/NFS. Use a local disk, or move to PostgreSQL."
+        )
+
+    try:
+        if BASE_DIR.resolve() in settings.DATA_DIR.resolve().parents or \
+                settings.DATA_DIR.resolve() == BASE_DIR.resolve():
+            problems.append(
+                f"The data directory sits inside the code tree ({resolved}). Runtime data "
+                "is destroyed by redeploys and risks client data being committed. Set "
+                "APP_DATA_DIR to a location outside the repository."
+            )
+    except (OSError, ValueError):  # pragma: no cover - unresolvable paths
+        pass
+
+    return problems
+
+
 def ensure_directories() -> None:
     """Create the runtime directories the app writes to."""
     settings.DATA_DIR.mkdir(parents=True, exist_ok=True)

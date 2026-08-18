@@ -355,6 +355,65 @@ most a page. Full populations remain reachable via CSV export, which streams fro
 `ruleset_version` returns the stored analysis instead of recomputing. This also gives free
 deduplication and makes results reproducible by construction.
 
+### 5.6 Where the database lives — development and deployment
+
+Written after a real incident: the runtime database sat in a OneDrive-synced folder, and sessions
+were torn down and recreated mid-use, forcing repeated re-logins with **nothing in the server log**.
+The cause is not Streamlit — it is a sync client touching a file the application holds open. The
+same class of failure occurs on network shares, Dropbox, and Windows roaming profiles.
+
+#### Rule 1 — runtime data never lives in the code tree
+
+The database, its `-wal`/`-shm` sidecars, uploaded files and logs are *runtime state*. They must sit
+outside the repository and outside any synchronised or networked filesystem. Keeping them beside the
+code invites three distinct failures: sync corruption, accidental commits of client data (§13.2),
+and destruction on redeploy.
+
+One environment variable selects the location, and nothing else in the code knows a path:
+
+```
+APP_DATA_DIR=/var/lib/scheduleass          # Linux service
+APP_DATA_DIR=C:\Users\<user>\AppData\Local\ScheduleAss   # Windows local
+```
+
+Local development reads it from a gitignored `.env`. This is already the implemented pattern.
+
+#### Rule 2 — match the store to the deployment topology
+
+| Deployment | Store | Why |
+|---|---|---|
+| Single analyst, local | SQLite (WAL) on a local disk | Fine. Simply never on a synced or network path. |
+| **Small team, one shared server** (current target) | SQLite (WAL) on a persistent local volume, **or** PostgreSQL | Streamlit serves all sessions from one process, so a single writer is not a bottleneck yet. WAL gives concurrent reads; writers still serialise, and `timeout=30` turns contention into a visible stall rather than an error. Move to Postgres when uploads collide in practice. |
+| Docker / container | Postgres, **or** SQLite on a **named volume** | A container filesystem is ephemeral. SQLite inside the image is destroyed on every redeploy. |
+| Multiple replicas / autoscaling | **PostgreSQL only** | SQLite cannot be shared across processes on different hosts. This is a hard boundary, not a preference. |
+| **Streamlit Community Cloud** | **PostgreSQL / managed service only** | The filesystem is ephemeral and rebuilt on every restart or redeploy. **SQLite there silently loses all data** — it will appear to work in a session and be empty the next day. |
+
+#### Rule 3 — the migration path is one setting
+
+Because access already goes through a single `DatabaseManager` and the schema is versioned in
+`schema_meta`, moving SQLite → Postgres is a connection-string change plus a data copy, not a
+rewrite. Introducing SQLAlchemy (§5.1) at that point keeps both engines on one codebase. Do it when
+concurrency demands it, not before.
+
+#### Rule 4 — operational requirements, wherever it runs
+
+- **Backups.** SQLite: `VACUUM INTO` on a schedule, not a file copy of a live database. Postgres:
+  `pg_dump`, or the provider's snapshots. Untested backups do not count.
+- **Migrations.** Schema changes ship as versioned, forward-only migrations against `schema_meta`.
+- **Secrets.** Connection strings and credentials come from the environment, or `st.secrets` on
+  Streamlit Cloud. Never committed — §3.1 records that hardcoded credentials were already removed
+  once.
+- **Retention.** §14.5 keeps uploads indefinitely, so storage grows without bound. Budget ~3–4 MB
+  per upload and put the file store on a volume that can grow.
+- **Health check.** On startup, log the resolved data directory and fail loudly if it is
+  unwritable — a silently-created empty database in the wrong place is how this class of bug hides.
+
+#### Rule 5 — a check worth automating
+
+The application should refuse to start, or warn prominently, when its data directory resolves inside
+a known sync tree (`OneDrive`, `Dropbox`, `Google Drive`, `iCloud`) or onto a UNC path. That single
+guard would have turned a multi-hour investigation into a startup message.
+
 ---
 
 ## 6. Ingestion
