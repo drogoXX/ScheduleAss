@@ -26,15 +26,26 @@ Write-Host ""
 
 # Unbuffered so the console log is complete even if the process dies abruptly.
 $env:PYTHONUNBUFFERED = "1"
-# Surface client-side errors in the browser during diagnosis.
+
+# faulthandler is the whole point of this wrapper. A native fault - an access
+# violation inside a C extension, or a stack overflow - kills the interpreter
+# with no Python traceback, no shutdown line, and (as observed) no Windows Error
+# Reporting entry. With faulthandler active, Python dumps the C-level stack of
+# every thread to stderr first, which is the only way to see where it died.
+$env:PYTHONFAULTHANDLER = "1"
+
+# Launch via `python -m` rather than the streamlit shim so the environment above
+# applies to the interpreter that actually runs the app, and the exit code we
+# capture is the app's own rather than a wrapper's.
 $args = @(
-    "run", "app.py",
+    "-X", "faulthandler",
+    "-m", "streamlit", "run", "app.py",
     "--client.showErrorDetails=full",
     "--client.toolbarMode=auto",
     "--server.port=8501"
 )
 
-$proc = Start-Process -FilePath "streamlit" -ArgumentList $args `
+$proc = Start-Process -FilePath "python" -ArgumentList $args `
     -RedirectStandardOutput $console -RedirectStandardError "$console.err" `
     -NoNewWindow -PassThru
 
