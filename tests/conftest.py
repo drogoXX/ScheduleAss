@@ -5,7 +5,9 @@ Every test runs against a throwaway data directory so the suite never touches a
 real database, and configuration is set before src.config is imported.
 """
 
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,18 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+# Redirect the data directory at IMPORT time, not in a fixture.
+#
+# logging_config.configure_logging() installs its file handler on first use and
+# caches it for the process, resolving settings.log_dir at that moment. That
+# happens while pytest is collecting - before any per-test fixture runs - so a
+# fixture-level monkeypatch is too late and the suite ends up writing into the
+# real runtime log directory (whatever .env points at). That pollutes the very
+# log used to diagnose production problems, so it is set here instead.
+_TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="scheduleass-tests-"))
+os.environ["APP_DATA_DIR"] = str(_TEST_DATA_DIR)
+os.environ.setdefault("APP_ENV", "test")
 
 
 @pytest.fixture(autouse=True)
